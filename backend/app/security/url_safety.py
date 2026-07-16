@@ -8,6 +8,7 @@ from urllib.parse import SplitResult, urlsplit
 
 from fastapi import HTTPException
 
+from app.core.config import get_settings
 from app.security.url_normalization import ALLOWED_SCHEMES, normalize_public_url
 
 METADATA_IPS = {ipaddress.ip_address("169.254.169.254")}
@@ -18,6 +19,7 @@ FORBIDDEN_HOSTNAMES = {
     "instance-data",
     "169.254.169.254",
 }
+CONTROLLED_DEMO_TARGET_HOSTNAME = "demo-target"
 
 
 class UnsafeUrlError(ValueError):
@@ -29,41 +31,71 @@ class SafeUrl:
     normalized_url: str
     hostname: str
     resolved_ips: tuple[str, ...]
+    demo_target_exception: bool = False
+
+
+@dataclass(frozen=True)
+class UrlSafetyPolicy:
+    allow_internal_demo_target: bool = False
+    demo_target_internal_url: str = "http://demo-target:9000"
+    is_production: bool = False
 
 
 Resolver = Callable[[str], list[ipaddress.IPv4Address | ipaddress.IPv6Address]]
 
 
+def current_url_safety_policy() -> UrlSafetyPolicy:
+    settings = get_settings()
+    return UrlSafetyPolicy(
+        allow_internal_demo_target=settings.allow_internal_demo_target,
+        demo_target_internal_url=settings.demo_target_internal_url,
+        is_production=settings.is_production,
+    )
+
+
 def validate_url_for_scanning(
-    raw_url: str, resolver: Resolver | None = None
+    raw_url: str,
+    resolver: Resolver | None = None,
+    policy: UrlSafetyPolicy | None = None,
 ) -> SafeUrl:
+    policy = policy or current_url_safety_policy()
+    if policy.is_production and policy.allow_internal_demo_target:
+        raise UnsafeUrlError(
+            "Internal demo target exception is not allowed in production"
+        )
+
     try:
         normalized_url = normalize_public_url(raw_url)
     except HTTPException as exc:
         raise UnsafeUrlError(str(exc.detail)) from exc
     parsed = urlsplit(normalized_url)
     hostname = normalized_hostname(parsed)
-    reject_forbidden_hostname(hostname)
+    demo_exception = is_exact_demo_target(parsed, policy)
+    if not demo_exception:
+        reject_forbidden_hostname(hostname)
 
     resolved_ips = resolve_all_ips(hostname) if resolver is None else resolver(hostname)
     if not resolved_ips:
         raise UnsafeUrlError("Hostname did not resolve to any IP address")
 
     for ip_address in resolved_ips:
-        reject_forbidden_ip(ip_address)
+        if not demo_exception:
+            reject_forbidden_ip(ip_address)
 
     return SafeUrl(
         normalized_url=normalized_url,
         hostname=hostname,
         resolved_ips=tuple(str(ip_address) for ip_address in resolved_ips),
+        demo_target_exception=demo_exception,
     )
 
 
 def validate_redirect_target(
     redirect_url: str,
     resolver: Resolver | None = None,
+    policy: UrlSafetyPolicy | None = None,
 ) -> SafeUrl:
-    return validate_url_for_scanning(redirect_url, resolver=resolver)
+    return validate_url_for_scanning(redirect_url, resolver=resolver, policy=policy)
 
 
 def resolve_all_ips(
@@ -107,6 +139,33 @@ def reject_forbidden_hostname(hostname: str) -> None:
         raise UnsafeUrlError("Hostname is reserved for local or metadata access")
     if parse_ip(hostname) is None and "." not in hostname:
         raise UnsafeUrlError("Internal-only hostnames are not allowed")
+
+
+def is_exact_demo_target(parsed: SplitResult, policy: UrlSafetyPolicy) -> bool:
+    if not policy.allow_internal_demo_target:
+        return False
+    configured = urlsplit(policy.demo_target_internal_url)
+    if configured.scheme.lower() not in ALLOWED_SCHEMES:
+        raise UnsafeUrlError("Configured demo target URL must use http or https")
+    configured_hostname = normalized_hostname(configured)
+    if configured_hostname != CONTROLLED_DEMO_TARGET_HOSTNAME:
+        raise UnsafeUrlError(
+            "Configured demo target URL must use the controlled demo-target hostname"
+        )
+    try:
+        parsed_port = parsed.port or default_port(parsed.scheme)
+        configured_port = configured.port or default_port(configured.scheme)
+    except ValueError as exc:
+        raise UnsafeUrlError("Configured demo target port is invalid") from exc
+    return (
+        parsed.scheme.lower() == configured.scheme.lower()
+        and normalized_hostname(parsed) == configured_hostname
+        and parsed_port == configured_port
+    )
+
+
+def default_port(scheme: str) -> int:
+    return 443 if scheme.lower() == "https" else 80
 
 
 def reject_forbidden_ip(

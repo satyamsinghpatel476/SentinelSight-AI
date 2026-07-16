@@ -4,10 +4,10 @@ SentinelSight AI is designed for authorized, passive website monitoring. The pro
 
 ## Current Milestone
 
-Milestone 2 includes application security headers, environment-based configuration, no checked-in
-secrets, health endpoints without sensitive details, Argon2 password hashing, HttpOnly cookie
-authentication, basic login rate limiting, backend-enforced role checks and organization-scoped user
-management.
+Milestones 1 through 5 include application security headers, environment-based configuration, no
+checked-in secrets, health endpoints without sensitive details, Argon2 password hashing, HttpOnly
+cookie authentication, login rate limiting, backend-enforced role checks, organization-scoped user
+and website management, passive scanning, screenshot evidence capture and baseline approval.
 
 ## URL Registration Controls
 
@@ -15,8 +15,21 @@ management.
 - URLs with embedded usernames or passwords are rejected.
 - URL fragments are removed before storage.
 - Administrators must confirm ownership or authorization before a website asset can be registered.
-- Scanner-level DNS resolution, redirect validation and private-IP SSRF blocking are not enabled
-  yet because outbound scanning is not implemented until the next milestone.
+- Scanner-level DNS resolution, redirect validation and private-IP SSRF blocking are enforced
+  immediately before outbound HTTP and Playwright requests.
+
+## Scanner Controls
+
+- Scanner requests are passive and do not exploit vulnerabilities.
+- Scan targets are validated for scheme, credentials, hostname, DNS results and unsafe IP ranges.
+- Redirect destinations are revalidated before being followed.
+- HTTP fetching enforces redirect count, connection/read/total timeout and response-size limits.
+- Browser screenshot capture blocks `file://` and forbidden subresource URLs.
+- Raw target HTML is not stored or displayed.
+- Screenshot retrieval is authenticated and scoped by organization ownership of the scan.
+- The controlled `http://demo-target:9000` exception is development/test-only, disabled by default
+  in `.env.example`, enabled by local Compose for the demo target, limited to the exact
+  `demo-target` hostname/scheme/port and rejected in production.
 
 ## Authentication Controls
 
@@ -25,6 +38,7 @@ management.
 - Production deployments should set `COOKIE_SECURE=true`.
 - Viewers and Security Analysts cannot use Administrator-only user-management APIs.
 - Records owned by another organization are hidden with 404 where appropriate.
+- Scan, finding, baseline and screenshot records are also scoped by `organization_id`.
 
 ## Ethical Use
 
@@ -38,4 +52,5 @@ Report security issues privately to the project maintainers. Include reproductio
 
 - `.env` files are local only and must not be committed.
 - Production deployments must provide a strong `APP_SECRET_KEY`.
-- Scanner protections will be implemented before website scanning is enabled.
+- Visual comparison, incident workflow and tamper-evident audit-chain verification are still future
+  milestones and must not be claimed as complete.

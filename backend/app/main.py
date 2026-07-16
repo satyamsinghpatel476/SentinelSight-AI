@@ -8,6 +8,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app.api.auth import router as auth_router
 from app.api.health import router as health_router
+from app.api.scans import router as scans_router
 from app.api.users import router as users_router
 from app.api.websites import router as websites_router
 from app.core.config import get_settings
@@ -28,6 +29,7 @@ def create_app() -> FastAPI:
     app.middleware("http")(enforce_request_body_limit)
     app.include_router(auth_router, prefix="/api")
     app.include_router(health_router, prefix="/api")
+    app.include_router(scans_router, prefix="/api")
     app.include_router(users_router, prefix="/api")
     app.include_router(websites_router, prefix="/api")
 

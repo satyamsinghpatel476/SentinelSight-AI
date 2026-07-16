@@ -32,10 +32,18 @@ class Settings(BaseSettings):
     scan_max_response_bytes: int = 5_000_000
     scan_max_redirects: int = 3
     scan_max_concurrent: int = 3
+    scan_visible_text_max_chars: int = 20_000
+    scan_rate_limit_user_attempts: int = 10
+    scan_rate_limit_org_attempts: int = 50
+    scan_rate_limit_window_seconds: int = 3_600
+    scan_rate_limit_max_keys: int = 10_000
+    allow_internal_demo_target: bool = False
+    demo_target_internal_url: str = "http://demo-target:9000"
 
     screenshot_timeout_ms: int = 15_000
     screenshot_width: int = 1365
     screenshot_height: int = 768
+    evidence_storage_dir: str = "storage"
 
     visual_minor_threshold: int = 5
     visual_moderate_threshold: int = 15
@@ -65,6 +73,10 @@ class Settings(BaseSettings):
             )
         if not self.cookie_secure:
             raise RuntimeError("COOKIE_SECURE must be true in production")
+        if self.allow_internal_demo_target:
+            raise RuntimeError(
+                "ALLOW_INTERNAL_DEMO_TARGET cannot be true in production"
+            )
 
 
 @lru_cache

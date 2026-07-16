@@ -2,11 +2,12 @@
 
 ## Current Status
 
-Milestones 1 through 3 are complete. A security audit hardening pass has also been completed. The
-next incomplete milestone is Milestone 4 - Safe scanning foundation.
+Milestones 1 through 5 are complete. A security audit hardening pass has also been completed. The
+next incomplete milestone is Milestone 6 - baseline comparison, risk scoring and incident workflow.
 
-Environment limitation: Docker files were created, but Docker runtime validation could not be
-executed because the `docker` CLI is not installed in this workspace.
+Environment note: Docker CLI is installed (`Docker version 29.6.1`), and `docker compose config`
+passes. Docker build/runtime validation could not be completed in this session because the current
+user cannot access `/var/run/docker.sock`, and passwordless sudo is not available.
 
 ## Milestone Log
 
@@ -151,13 +152,139 @@ auto-load an unrelated global ROS pytest plugin with missing dependencies.
     - listed the organization website assets.
   - `git diff --check` - passed.
 
-Next incomplete milestone: Milestone 4 - Safe scanning foundation.
+### Milestone 4 - Safe Scanning Foundation
+
+- Status: complete on 2026-07-16.
+- Added `Scan` and `Finding` database models plus Alembic migration
+  `202607160003_scans_findings_baselines.py`.
+- Added scan status enum values `queued`, `running`, `completed` and `failed`.
+- Added scan type enum values `baseline` and `comparison`.
+- Added organization-scoped scan APIs:
+  - `POST /api/websites/{website_id}/scans`,
+  - `GET /api/websites/{website_id}/scans`,
+  - `GET /api/scans/{scan_id}`,
+  - `GET /api/scans/{scan_id}/findings`.
+- Added backend RBAC:
+  - Administrators and Security Analysts may start scans,
+  - Viewers may view results but cannot start scans.
+- Added organization-scoped scan and finding queries that return 404 for another organization's
+  resources.
+- Prevented more than one active queued/running scan for the same website.
+- Added configurable in-memory per-user and per-organization scan rate limits.
+- Added background scan execution using FastAPI background tasks.
+- Added scanner modules:
+  - `backend/app/scanners/url_validator.py`,
+  - `backend/app/scanners/http_scanner.py`,
+  - `backend/app/scanners/header_analyzer.py`,
+  - `backend/app/scanners/content_analyzer.py`,
+  - `backend/app/scanners/tls_analyzer.py`,
+  - `backend/app/scanners/scan_orchestrator.py`.
+- Integrated the scanner-grade SSRF validator before HTTP and browser requests.
+- Added bounded HTTP fetches with connection/read/total timeouts, redirect count limits and response
+  body size limits.
+- Added redirect target revalidation before following redirects.
+- Added a controlled local demo-target exception:
+  - default is disabled,
+  - production rejects it,
+  - only `http://demo-target:9000` by exact scheme/hostname/port can be allowed,
+  - arbitrary private IPs and other Docker hostnames remain blocked.
+- Added passive deterministic findings for HTTP/HTTPS, missing security headers, unsafe CORS,
+  server version disclosure, HTTP 5xx, TLS certificate expiry and session-like cookie attributes.
+- Added safe scan metadata collection:
+  - requested URL,
+  - final URL,
+  - HTTP status,
+  - response time,
+  - page title,
+  - bounded visible text,
+  - visible-text hash,
+  - HTML hash,
+  - redacted/summarized response headers,
+  - external script and iframe domains,
+  - redirect chain,
+  - scan timestamps,
+  - safe failure reason.
+- Raw target HTML is not stored or displayed.
+- Updated Website Detail UI with role-aware Run Scan, latest scan state, polling and scan history.
+
+### Milestone 5 - Screenshot and Baseline
+
+- Status: complete on 2026-07-16.
+- Added Playwright screenshot capture with:
+  - fixed viewport from environment settings,
+  - navigation timeout,
+  - downloads disabled,
+  - unexpected dialogs dismissed,
+  - request interception,
+  - forbidden subresource URLs blocked,
+  - `file://` blocked,
+  - generated UUID screenshot filenames,
+  - screenshot perceptual hash generation.
+- Updated Dockerfile to install Playwright Chromium in the runtime image.
+- Added secure screenshot storage under configured evidence storage.
+- Added authenticated organization-scoped screenshot endpoint:
+  - `GET /api/evidence/screenshots/{scan_id}`.
+- Screenshot retrieval is keyed by `scan_id`; file paths are never taken from user input.
+- Added path traversal protection for screenshot filename handling.
+- Stored screenshot filename, content type, dimensions and perceptual hash in the `Scan` record.
+- Added `Baseline` model and baseline approval workflow:
+  - completed scans can be approved by Administrator or Security Analyst,
+  - previous active baselines are deactivated,
+  - the selected scan becomes the active trusted baseline,
+  - approving user and approval timestamp are stored,
+  - an audit entry is written for baseline approval.
+- Added baseline APIs:
+  - `POST /api/scans/{scan_id}/approve-baseline`,
+  - `GET /api/websites/{website_id}/baseline`.
+- Added Scan Detail UI showing status, requested/final URL, response time, page title, screenshot,
+  findings, headers summary, TLS-related finding summary and safe failure message.
+- Added Website Detail baseline section with active baseline metadata, screenshot and approval action.
+- Added Compose-local demo seeding support through `AUTO_SEED_DEMO_USERS=true` so the Docker demo
+  can create demo users from environment values when Docker daemon access is available.
+
+Milestone 4/5 verification commands run:
+
+- Pre-implementation `make backend-test` - passed, 35 tests.
+- Pre-implementation `npm run typecheck` from `frontend/` - passed.
+- Pre-implementation `npm run build` from `frontend/` - passed.
+- `make backend-format` - passed.
+- `make backend-lint` - passed.
+- `make backend-test` - passed, 51 tests.
+- `npm run typecheck` from `frontend/` - passed.
+- `npm run build` from `frontend/` - passed.
+- `npm audit --omit=dev` from `frontend/` - passed, 0 vulnerabilities after network approval.
+- `DATABASE_URL=sqlite:////tmp/sentinelsight_m45_alembic.db ../.venv/bin/alembic upgrade head`
+  from `backend/` - passed.
+- `docker compose config` with explicit local demo environment values - passed.
+- `docker compose build` - blocked by host Docker socket permissions:
+  `permission denied while trying to connect to the docker API at unix:///var/run/docker.sock`.
+- `docker compose up -d`, `docker compose ps`, `docker compose logs --tail=100 app` and the real
+  Docker-network controlled demo-target scan were not run because the Docker daemon is inaccessible
+  to the current user/session.
+
+Remaining limitations after Milestone 5:
+
+- Visual baseline comparison is not implemented yet.
+- Risk scoring beyond deterministic finding risk points is not implemented yet.
+- Incident creation and incident workflow are not implemented yet.
+- Tamper-evident hash-chained audit logging is not implemented yet; Milestone 5 writes a normal
+  baseline approval audit entry only.
+- AI remediation remains disabled and unimplemented.
+- The scan background runner and rate limiter are in-process MVP mechanisms, not distributed job
+  infrastructure.
+- Docker runtime/demo validation still needs to be rerun after fixing Docker daemon permissions for
+  the development user.
+
+Next incomplete milestone: Milestone 6 - baseline comparison, risk scoring and incident workflow.
 
 ### Security Audit and Hardening Pass
 
 - Status: complete on 2026-07-16.
 - Created `SECURITY_AUDIT.md` with Critical, High, Moderate and Low findings.
-- Confirmed the complete PS-005 baseline-to-defacement-to-incident demo flow is not implemented yet.
+- Confirmed the complete PS-005 baseline-to-defacement-to-incident demo flow was not implemented yet
+  at the time of the audit. Milestones 4 and 5 now provide scanning, screenshots and baseline
+  approval, but visual comparison, incident workflow and tamper-evident audit chain remain
+  incomplete.
 - Fixed High findings that were practical within the currently implemented scope:
   - production runtime validation now rejects weak/default `APP_SECRET_KEY`,
   - production runtime validation now requires `COOKIE_SECURE=true`,
@@ -185,12 +312,13 @@ Next incomplete milestone: Milestone 4 - Safe scanning foundation.
   - `npm run typecheck` from `frontend/` - passed.
   - `npm run build` from `frontend/` - passed.
   - `npm audit --omit=dev` from `frontend/` - passed, 0 vulnerabilities.
-- Docker build verification was requested but could not be run because `docker` is not installed in
-  this workspace:
-  - `docker build -t sentinelsight-ai:security-audit .` failed with `docker: command not found`.
-- Complete demo-flow testing was requested but cannot pass until Milestone 4 and later scanner,
-  baseline, risk, incident and audit systems exist.
-  - Attempted flow over local Uvicorn:
-    - login succeeded,
-    - website registration succeeded,
-    - `POST /api/websites/{website_id}/scans` returned HTTP 405 because scan endpoints do not exist.
+- Historical note: Docker build verification in that pass could not be run because `docker` was not
+  installed in the workspace then.
+- Current note after Milestones 4/5: Docker CLI is installed, but daemon access is blocked for the
+  current user/session by `/var/run/docker.sock` permissions.
+- Current demo-flow status after Milestones 4/5:
+  - scanning, screenshot capture and baseline approval are implemented and covered by backend tests,
+  - the complete baseline-to-defacement-to-incident demonstration still cannot be claimed until
+    visual comparison, incident workflow and risk escalation are implemented,
+  - the real Docker-network controlled demo-target scan still needs to be rerun after Docker daemon
+    permissions are fixed.

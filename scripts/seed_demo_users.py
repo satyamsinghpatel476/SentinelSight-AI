@@ -4,8 +4,15 @@ import os
 import sys
 from pathlib import Path
 
-from dotenv import load_dotenv
 from sqlalchemy import select
+
+try:
+    from dotenv import load_dotenv
+except ImportError:
+
+    def load_dotenv(path: Path) -> bool:
+        return False
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.append(str(PROJECT_ROOT / "backend"))

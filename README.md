@@ -10,11 +10,11 @@ PS-005 - Website Defacement Detection & Vulnerability Assessment Platform.
 
 This repository is being built milestone by milestone. Completed scope currently includes the
 FastAPI/React foundation, authentication, backend RBAC, organization-scoped user management,
-authorized website asset registration and scanner-grade URL safety helpers.
+authorized website asset registration, SSRF-safe passive scanning, screenshot capture and baseline
+approval.
 
-Security scanning, baseline approval, screenshot capture, visual/content comparison, incident
-workflow, audit logging and AI remediation are intentionally not claimed as complete until their
-implementation milestones are finished.
+Visual comparison, incident workflow, tamper-evident audit-chain verification and AI remediation are
+intentionally not claimed as complete until their implementation milestones are finished.
 
 ## Technology Stack
 
@@ -74,8 +74,10 @@ export DEMO_TARGET_TOGGLE_SECRET="replace-with-a-demo-toggle-secret"
 docker compose up --build
 ```
 
-The app container runs `alembic upgrade head` before starting Uvicorn. Docker validation was not run
-in this workspace because the `docker` CLI is not installed here.
+The app container runs `alembic upgrade head` before starting Uvicorn. Docker Compose enables the
+controlled local demo-target exception by default and can auto-seed demo users when
+`AUTO_SEED_DEMO_USERS=true`. Docker CLI is installed in the current workspace, but full build/runtime
+validation was blocked by Docker daemon socket permissions for the current user/session.
 
 ## Environment Variables
 
@@ -101,6 +103,9 @@ make seed-demo-users
 The seed script reads `DEMO_ADMIN_EMAIL`, `DEMO_ADMIN_PASSWORD`,
 `DEMO_ANALYST_EMAIL`, `DEMO_ANALYST_PASSWORD`, `DEMO_VIEWER_EMAIL` and
 `DEMO_VIEWER_PASSWORD`. It refuses placeholder passwords such as `change-me`.
+
+In Docker Compose, `AUTO_SEED_DEMO_USERS` defaults to `true` for local demonstration. The `.env`
+example keeps it `false` as a safer default outside the Compose demo path.
 
 ## Health Checks
 
@@ -130,14 +135,39 @@ validation accepts only `http` and `https`, rejects embedded credentials and str
 normalization. DNS/IP SSRF protections are implemented in the scanner milestone before any outbound
 scan requests are enabled.
 
+## Scanning and Baselines
+
+- `POST /api/websites/{website_id}/scans` starts a passive background scan. Administrators and
+  Security Analysts may start scans; Viewers may only view scan results.
+- `GET /api/websites/{website_id}/scans` lists organization-scoped scan history.
+- `GET /api/scans/{scan_id}` returns scan metadata.
+- `GET /api/scans/{scan_id}/findings` returns deterministic passive findings.
+- `POST /api/scans/{scan_id}/approve-baseline` approves a completed scan as the active trusted
+  baseline.
+- `GET /api/websites/{website_id}/baseline` returns the active baseline.
+- `GET /api/evidence/screenshots/{scan_id}` serves the screenshot only after authentication and
+  organization ownership checks.
+
+The scanner collects bounded visible text, hashes, response metadata, passive findings and a
+Playwright screenshot. Raw target HTML is not stored or displayed.
+
 ## Scanner Safety Boundary
 
-`backend/app/security/url_safety.py` contains the scanner-grade URL validation helper that must be
-called immediately before any future HTTP or browser request. It rejects localhost, private IPs,
-link-local IPs, reserved ranges, metadata hostnames, metadata IPs, embedded credentials,
-unsupported protocols, internal-only hostnames and unsafe redirect targets.
+`backend/app/security/url_safety.py` is called immediately before HTTP and browser requests. It
+rejects localhost, private IPs, link-local IPs, multicast/reserved/unspecified ranges, metadata
+hostnames, metadata IPs, embedded credentials, unsupported protocols, internal-only hostnames and
+unsafe redirect targets.
 
-Outbound scanning itself is not implemented yet.
+The only internal-host exception is a controlled development/test demo path:
+
+```bash
+ALLOW_INTERNAL_DEMO_TARGET=false
+DEMO_TARGET_INTERNAL_URL=http://demo-target:9000
+```
+
+Production rejects `ALLOW_INTERNAL_DEMO_TARGET=true`. When enabled outside production, only the
+exact `http://demo-target:9000` scheme, hostname and port may bypass the internal-host block.
+Redirects and browser subresource requests are still revalidated.
 
 ## Testing
 

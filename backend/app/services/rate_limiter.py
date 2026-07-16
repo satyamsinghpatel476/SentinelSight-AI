@@ -51,3 +51,67 @@ class LoginRateLimiter:
 
 
 login_rate_limiter = LoginRateLimiter()
+
+
+class ScanRateLimiter:
+    def __init__(self) -> None:
+        self._attempts: dict[str, list[float]] = defaultdict(list)
+
+    def check_and_record(self, user_id: str, organization_id: str) -> None:
+        settings = get_settings()
+        user_key = f"user:{user_id}"
+        org_key = f"org:{organization_id}"
+        self._check_key(
+            user_key,
+            settings.scan_rate_limit_user_attempts,
+            settings.scan_rate_limit_window_seconds,
+            settings.scan_rate_limit_max_keys,
+            "Too many scans started by this user. Try again later.",
+        )
+        self._check_key(
+            org_key,
+            settings.scan_rate_limit_org_attempts,
+            settings.scan_rate_limit_window_seconds,
+            settings.scan_rate_limit_max_keys,
+            "Too many scans started by this organization. Try again later.",
+        )
+        now = utc_now().timestamp()
+        self._attempts[user_key].append(now)
+        self._attempts[org_key].append(now)
+
+    def clear(self) -> None:
+        self._attempts.clear()
+
+    def _check_key(
+        self,
+        key: str,
+        limit: int,
+        window_seconds: int,
+        max_keys: int,
+        message: str,
+    ) -> None:
+        if key not in self._attempts and len(self._attempts) >= max_keys:
+            self._prune_oldest_key()
+
+        now = utc_now().timestamp()
+        window_start = now - window_seconds
+        self._attempts[key] = [
+            attempt for attempt in self._attempts[key] if attempt >= window_start
+        ]
+        if len(self._attempts[key]) >= limit:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail=message,
+            )
+
+    def _prune_oldest_key(self) -> None:
+        if not self._attempts:
+            return
+        oldest_key = min(
+            self._attempts,
+            key=lambda item: min(self._attempts[item]) if self._attempts[item] else 0,
+        )
+        self._attempts.pop(oldest_key, None)
+
+
+scan_rate_limiter = ScanRateLimiter()
