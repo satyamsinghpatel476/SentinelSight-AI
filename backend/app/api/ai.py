@@ -174,7 +174,7 @@ async def test_ai_config(
         api_key = payload.api_key or decrypt_existing_key(config)
         if provider is None or not model or not api_key:
             raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail="Provider, model and API key are required to test AI",
             )
         create_audit_log(
@@ -209,12 +209,10 @@ async def test_ai_config(
                 },
             )
             db.commit()
-            return AIConnectionTestRead(
-                success=False,
-                message=exc.safe_message,
-                provider=provider,
-                model=model,
-            )
+            raise HTTPException(
+                status_code=exc.http_status,
+                detail=exc.safe_message,
+            ) from exc
         create_audit_log(
             db,
             organization_id=current_user.organization_id,
@@ -227,7 +225,7 @@ async def test_ai_config(
         db.commit()
         return AIConnectionTestRead(
             success=True,
-            message="Provider connection succeeded",
+            message="Connection successful",
             provider=provider,
             model=model,
         )

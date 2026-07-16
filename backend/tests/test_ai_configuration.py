@@ -18,7 +18,7 @@ from app.services.ai.encryption import (
     decrypt_api_key,
     encrypt_api_key,
 )
-from app.services.ai.gemini_provider import GeminiProvider
+from app.services.ai.gemini_provider import GeminiProvider, extract_gemini_text
 from app.services.ai.schemas import (
     AIAnalysisPrompt,
     AIIncidentAnalysisResponse,
@@ -79,9 +79,99 @@ class InvalidOutputProvider(SuccessfulProvider):
         raise AIProviderError("Provider returned invalid structured JSON")
 
 
+class FailingConnectionProvider(SuccessfulProvider):
+    async def test_connection(self, request: AIProviderRequest) -> None:
+        self.captured.request = request
+        raise AIProviderError("Gemini returned no usable text content", http_status=502)
+
+
 @dataclass
 class CapturedGeminiHttp:
     payloads: list[dict[str, object]]
+
+
+def test_gemini_text_extractor_first_part_contains_text() -> None:
+    assert (
+        extract_gemini_text(
+            {"candidates": [{"content": {"parts": [{"text": " OK "}]}}]}
+        )
+        == "OK"
+    )
+
+
+def test_gemini_text_extractor_text_exists_in_later_part() -> None:
+    assert (
+        extract_gemini_text(
+            {
+                "candidates": [
+                    {
+                        "content": {
+                            "parts": [
+                                {"thoughtSignature": "opaque"},
+                                {"text": "later text"},
+                            ]
+                        }
+                    }
+                ]
+            }
+        )
+        == "later text"
+    )
+
+
+def test_gemini_text_extractor_ignores_thought_parts() -> None:
+    assert (
+        extract_gemini_text(
+            {
+                "candidates": [
+                    {
+                        "finishReason": "STOP",
+                        "content": {
+                            "parts": [
+                                {"thought": True, "text": "internal reasoning"},
+                                {"text": "visible answer"},
+                            ]
+                        },
+                    }
+                ]
+            }
+        )
+        == "visible answer"
+    )
+
+
+def test_gemini_text_extractor_combines_multiple_text_parts() -> None:
+    assert (
+        extract_gemini_text(
+            {
+                "candidates": [
+                    {"content": {"parts": [{"text": "first"}, {"text": "second"}]}},
+                    {"content": {"parts": [{"text": "third"}]}},
+                ]
+            }
+        )
+        == "first\nsecond\nthird"
+    )
+
+
+def test_gemini_text_extractor_missing_candidates() -> None:
+    with pytest.raises(AIProviderError, match="no usable text content"):
+        extract_gemini_text({})
+
+
+def test_gemini_text_extractor_empty_parts() -> None:
+    with pytest.raises(AIProviderError, match="no usable text content"):
+        extract_gemini_text({"candidates": [{"content": {"parts": []}}]})
+
+
+def test_gemini_text_extractor_blocked_prompt() -> None:
+    with pytest.raises(AIProviderError, match="Gemini blocked the request: SAFETY"):
+        extract_gemini_text({"promptFeedback": {"blockReason": "SAFETY"}})
+
+
+def test_gemini_text_extractor_finish_reason_without_text() -> None:
+    with pytest.raises(AIProviderError, match="Finish reason: MAX_TOKENS"):
+        extract_gemini_text({"candidates": [{"finishReason": "MAX_TOKENS"}]})
 
 
 def test_gemini_supported_schema_serialization() -> None:
@@ -156,7 +246,7 @@ def test_gemini_valid_structured_response(
 
     assert response.incident_summary == "Review needed"
     generation_config = captured.payloads[0]["generationConfig"]
-    assert generation_config["temperature"] == 0.0
+    assert "temperature" not in generation_config
     assert generation_config["responseMimeType"] == "application/json"
     assert "responseJsonSchema" in generation_config
     assert "responseSchema" not in generation_config
@@ -238,44 +328,48 @@ def test_gemini_missing_required_field_is_rejected(
         )
 
 
-def test_gemini_test_connection_uses_minimal_schema(
+def test_gemini_test_connection_accepts_plain_ok(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     captured = mock_gemini_http(
         monkeypatch,
-        {
-            "candidates": [
-                {
-                    "content": {
-                        "parts": [
-                            {
-                                "text": (
-                                    '{"status":"ok",'
-                                    '"message":"Gemini connection successful"}'
-                                )
-                            }
-                        ]
-                    }
-                }
-            ]
-        },
+        {"candidates": [{"content": {"parts": [{"text": "OK"}]}}]},
     )
 
     asyncio.run(GeminiProvider().test_connection(gemini_request()))
 
     generation_config = captured.payloads[0]["generationConfig"]
-    assert generation_config["responseMimeType"] == "application/json"
-    assert "responseJsonSchema" in generation_config
+    assert generation_config["maxOutputTokens"] == 256
+    assert generation_config["thinkingConfig"] == {"thinkingLevel": "minimal"}
+    assert "temperature" not in generation_config
+    assert "responseMimeType" not in generation_config
+    assert "responseJsonSchema" not in generation_config
     assert "responseSchema" not in generation_config
     assert "responseFormat" not in generation_config
-    schema = generation_config["responseJsonSchema"]
-    assert set(schema["properties"]) == {"status", "message"}
-    assert schema["required"] == ["status", "message"]
-    assert schema["additionalProperties"] is False
-    assert "incident_summary" not in schema["properties"]
     assert captured.payloads[0]["contents"][0]["parts"][0]["text"] == (
-        "Return a successful connection confirmation matching the supplied schema."
+        "Reply with exactly OK."
     )
+
+
+def test_gemini_test_connection_max_tokens_without_visible_text_fails_safely(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mock_gemini_http(
+        monkeypatch,
+        {
+            "candidates": [
+                {
+                    "finishReason": "MAX_TOKENS",
+                    "content": {
+                        "parts": [{"thought": True, "text": "internal reasoning"}]
+                    },
+                }
+            ]
+        },
+    )
+
+    with pytest.raises(AIProviderError, match="Finish reason: MAX_TOKENS"):
+        asyncio.run(GeminiProvider().test_connection(gemini_request()))
 
 
 def test_gemini_analysis_uses_full_analysis_schema(
@@ -289,16 +383,14 @@ def test_gemini_analysis_uses_full_analysis_schema(
                     "content": {
                         "parts": [
                             {
-                                "parsed": {
-                                    "incident_summary": "Review needed",
-                                    "priority_explanation": "High deterministic risk",
-                                    "immediate_actions": ["Verify deployment"],
-                                    "long_term_actions": ["Harden release process"],
-                                    "possible_false_positive_factors": [
-                                        "Planned change"
-                                    ],
-                                    "confidence_note": "Based on provided evidence",
-                                }
+                                "text": (
+                                    '{"incident_summary":"Review needed",'
+                                    '"priority_explanation":"High deterministic risk",'
+                                    '"immediate_actions":["Verify deployment"],'
+                                    '"long_term_actions":["Harden release process"],'
+                                    '"possible_false_positive_factors":["Planned change"],'
+                                    '"confidence_note":"Based on provided evidence"}'
+                                )
                             }
                         ]
                     }
@@ -312,7 +404,10 @@ def test_gemini_analysis_uses_full_analysis_schema(
     )
 
     assert response.priority_explanation == "High deterministic risk"
-    schema = captured.payloads[0]["generationConfig"]["responseJsonSchema"]
+    generation_config = captured.payloads[0]["generationConfig"]
+    assert generation_config["maxOutputTokens"] == 2048
+    assert generation_config["thinkingConfig"] == {"thinkingLevel": "minimal"}
+    schema = generation_config["responseJsonSchema"]
     assert "incident_summary" in schema["properties"]
     assert "status" not in schema["properties"]
 
@@ -329,7 +424,7 @@ def test_gemini_http_400_maps_to_safe_request_error(
                 "status": "INVALID_ARGUMENT",
                 "message": (
                     "Invalid JSON payload received. Unknown name "
-                    '"responseFormat" at generationConfig.'
+                    '"responseFormat" at generationConfig. key=AIzaSecretShouldNotLog'
                 ),
             }
         },
@@ -345,9 +440,11 @@ def test_gemini_http_400_maps_to_safe_request_error(
         exc_info.value.safe_message
         == "Gemini rejected the structured-output schema or request"
     )
-    assert "status=400" in caplog.text
+    assert exc_info.value.http_status == 400
+    assert "upstream_status=400" in caplog.text
     assert "INVALID_ARGUMENT" in caplog.text
     assert TEST_KEY not in caplog.text
+    assert "AIzaSecretShouldNotLog" not in caplog.text
 
 
 def test_administrator_can_save_ai_configuration(seeded_users: SeededUsers) -> None:
@@ -522,6 +619,30 @@ def test_connection_uses_selected_provider_and_model(
     assert captured.request.model == "evaluator-model-2026"
     assert captured.request.api_key == TEST_KEY
     assert captured.request.base_url == "https://llm.example.test/v1"
+
+
+def test_failed_provider_test_no_longer_returns_http_200_success_semantics(
+    seeded_users: SeededUsers,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured = CapturedProviderCall()
+    monkeypatch.setattr(
+        "app.services.ai.provider_factory.create_provider",
+        lambda provider: FailingConnectionProvider(captured),
+    )
+
+    async def scenario(client: httpx.AsyncClient) -> None:
+        await login(client, seeded_users.admin.email)
+        response = await client.post(
+            "/api/ai/config/test",
+            json=configuration_payload(),
+        )
+        assert response.status_code == 502
+        assert response.json()["detail"] == "Gemini returned no usable text content"
+
+    asyncio.run(with_client(scenario))
+    assert captured.request is not None
+    assert captured.request.provider == AIProvider.gemini
 
 
 def test_disabled_ai_rejects_analysis_request_clearly(

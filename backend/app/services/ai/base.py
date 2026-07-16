@@ -10,9 +10,10 @@ from app.services.ai.schemas import (
 
 
 class AIProviderError(RuntimeError):
-    def __init__(self, safe_message: str) -> None:
+    def __init__(self, safe_message: str, http_status: int = 502) -> None:
         super().__init__(safe_message)
         self.safe_message = safe_message
+        self.http_status = http_status
 
 
 class AIProviderClient(ABC):

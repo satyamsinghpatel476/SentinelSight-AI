@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from typing import Any
 from urllib.parse import quote
 
 import httpx
@@ -10,7 +11,6 @@ import httpx
 from app.services.ai.base import AIProviderClient, AIProviderError
 from app.services.ai.schemas import (
     AIAnalysisPrompt,
-    AIConnectionTestResponse,
     AIIncidentAnalysisResponse,
     AIProviderRequest,
 )
@@ -27,48 +27,53 @@ class GeminiProvider(AIProviderClient):
     async def test_connection(self, request: AIProviderRequest) -> None:
         prompt = AIAnalysisPrompt(
             system_prompt="",
-            user_prompt="Return a successful connection confirmation matching the supplied schema.",
+            user_prompt="Reply with exactly OK.",
             evidence={},
         )
-        response = await self.generate_structured_response(
+        await self.generate_text(
             request,
             prompt,
-            AIConnectionTestResponse,
-            max_output_tokens=80,
+            max_output_tokens=256,
+            thinking_level="minimal",
         )
-        if response.status != "ok":
-            raise AIProviderError("Provider returned invalid structured JSON")
 
     async def generate_analysis(
         self,
         request: AIProviderRequest,
         prompt: AIAnalysisPrompt,
-        max_output_tokens: int = 900,
+        max_output_tokens: int = 2048,
     ) -> AIIncidentAnalysisResponse:
-        return await self.generate_structured_response(
+        text = await self.generate_text(
             request,
             prompt,
-            AIIncidentAnalysisResponse,
             max_output_tokens=max_output_tokens,
+            response_schema=json_schema_for_model(AIIncidentAnalysisResponse),
+            thinking_level="minimal",
         )
+        return validate_structured_response(text, AIIncidentAnalysisResponse)
 
-    async def generate_structured_response(
+    async def generate_text(
         self,
         request: AIProviderRequest,
         prompt: AIAnalysisPrompt,
-        response_model: type[AIConnectionTestResponse | AIIncidentAnalysisResponse],
         max_output_tokens: int,
-    ) -> AIConnectionTestResponse | AIIncidentAnalysisResponse:
+        response_schema: dict[str, Any] | None = None,
+        thinking_level: str | None = None,
+    ) -> str:
         model = request.model.removeprefix("models/")
         model_path = quote(model, safe="")
+        generation_config: dict[str, object] = {
+            "maxOutputTokens": max_output_tokens,
+        }
+        if thinking_level is not None:
+            generation_config["thinkingConfig"] = {"thinkingLevel": thinking_level}
+        if response_schema is not None:
+            generation_config["responseMimeType"] = "application/json"
+            generation_config["responseJsonSchema"] = response_schema
+
         payload = {
             "contents": [{"role": "user", "parts": [{"text": prompt.user_prompt}]}],
-            "generationConfig": {
-                "temperature": 0.0,
-                "maxOutputTokens": max_output_tokens,
-                "responseMimeType": "application/json",
-                "responseJsonSchema": json_schema_for_model(response_model),
-            },
+            "generationConfig": generation_config,
         }
         if prompt.system_prompt:
             payload["systemInstruction"] = {"parts": [{"text": prompt.system_prompt}]}
@@ -81,40 +86,174 @@ class GeminiProvider(AIProviderClient):
                 )
             if response.status_code >= 400:
                 error_code, error_message = provider_error_details(response)
-                logger.warning(
-                    "Gemini provider request failed: status=%s code=%s message=%s",
+                error = safe_provider_error(
                     response.status_code,
+                    error_code=error_code,
+                    error_message=error_message,
+                )
+                logger.warning(
+                    (
+                        "Gemini provider request failed: provider=gemini "
+                        "model=%s upstream_status=%s finish_reason=%s "
+                        "candidate_count=%s usable_text_parts=%s error_code=%s "
+                        "safe_error_category=%s message=%s"
+                    ),
+                    model,
+                    response.status_code,
+                    "none",
+                    0,
+                    0,
                     error_code or "unknown",
+                    error.safe_message,
                     error_message or "unavailable",
                 )
-                raise AIProviderError(
-                    safe_provider_error(
-                        response.status_code,
-                        error_code=error_code,
-                        error_message=error_message,
-                    )
+                raise error
+            response_body = response.json()
+            try:
+                text = extract_gemini_text(response_body)
+            except AIProviderError as exc:
+                log_gemini_response_diagnostics(
+                    request=request,
+                    response_body=response_body,
+                    upstream_status=response.status_code,
+                    safe_error_category=exc.safe_message,
                 )
-            content = structured_response_content(response.json())
-            return validate_structured_response(content, response_model)
+                raise
+            log_gemini_response_diagnostics(
+                request=request,
+                response_body=response_body,
+                upstream_status=response.status_code,
+                safe_error_category=None,
+            )
+            return text
         except AIProviderError:
             raise
         except (KeyError, IndexError, TypeError, json.JSONDecodeError) as exc:
             raise AIProviderError(
-                "Provider returned an unexpected response shape"
+                "Provider returned an unexpected response shape",
+                http_status=502,
+            ) from exc
+        except httpx.TimeoutException as exc:
+            raise AIProviderError(
+                "Provider request timed out", http_status=504
             ) from exc
         except httpx.HTTPError as exc:
-            raise AIProviderError("Provider request failed safely") from exc
+            raise AIProviderError(
+                "Provider request failed safely",
+                http_status=502,
+            ) from exc
 
 
-def structured_response_content(response_body: dict[str, object]) -> object:
-    part = response_body["candidates"][0]["content"]["parts"][0]
-    if not isinstance(part, dict):
-        raise TypeError("Gemini response part is not an object")
-    if "parsed" in part:
-        return part["parsed"]
-    if "text" in part:
-        return part["text"]
-    return part
+def extract_gemini_text(response_body: dict[str, Any]) -> str:
+    texts: list[str] = []
+    candidates = response_body.get("candidates", [])
+    if isinstance(candidates, list):
+        for candidate in candidates:
+            if not isinstance(candidate, dict):
+                continue
+            content = candidate.get("content") or {}
+            if not isinstance(content, dict):
+                continue
+            parts = content.get("parts", [])
+            if not isinstance(parts, list):
+                continue
+            for part in parts:
+                if not isinstance(part, dict):
+                    continue
+                if part.get("thought") is True:
+                    continue
+                text = part.get("text")
+                if isinstance(text, str) and text.strip():
+                    texts.append(text.strip())
+
+    if texts:
+        return "\n".join(texts)
+
+    prompt_feedback = response_body.get("promptFeedback") or {}
+    block_reason = (
+        prompt_feedback.get("blockReason")
+        if isinstance(prompt_feedback, dict)
+        else None
+    )
+    finish_reasons = gemini_finish_reasons(response_body)
+
+    if block_reason:
+        error = AIProviderError(
+            f"Gemini blocked the request: {block_reason}",
+            http_status=502,
+        )
+        raise error
+
+    if finish_reasons:
+        raise AIProviderError(
+            "Gemini returned no text. Finish reason: " + ", ".join(finish_reasons),
+            http_status=502,
+        )
+
+    raise AIProviderError("Gemini returned no usable text content", http_status=502)
+
+
+def gemini_finish_reasons(response_body: dict[str, Any]) -> list[str]:
+    candidates = response_body.get("candidates", [])
+    if not isinstance(candidates, list):
+        return []
+    reasons: list[str] = []
+    for candidate in candidates:
+        if not isinstance(candidate, dict):
+            continue
+        reason = candidate.get("finishReason")
+        if reason:
+            reasons.append(str(reason))
+    return reasons
+
+
+def gemini_diagnostic_counts(response_body: dict[str, Any]) -> tuple[int, int]:
+    candidates = response_body.get("candidates", [])
+    if not isinstance(candidates, list):
+        return 0, 0
+    usable_text_parts = 0
+    for candidate in candidates:
+        if not isinstance(candidate, dict):
+            continue
+        content = candidate.get("content") or {}
+        if not isinstance(content, dict):
+            continue
+        parts = content.get("parts", [])
+        if not isinstance(parts, list):
+            continue
+        for part in parts:
+            if not isinstance(part, dict):
+                continue
+            text = part.get("text")
+            if isinstance(text, str) and text.strip():
+                usable_text_parts += 1
+    return len(candidates), usable_text_parts
+
+
+def log_gemini_response_diagnostics(
+    *,
+    request: AIProviderRequest,
+    response_body: dict[str, Any],
+    upstream_status: int,
+    safe_error_category: str | None,
+) -> None:
+    candidate_count, usable_text_parts = gemini_diagnostic_counts(response_body)
+    finish_reasons = gemini_finish_reasons(response_body)
+    log = logger.warning if safe_error_category else logger.info
+    log(
+        (
+            "Gemini provider response: provider=%s model=%s upstream_status=%s "
+            "finish_reason=%s candidate_count=%s usable_text_parts=%s "
+            "safe_error_category=%s"
+        ),
+        request.provider.value,
+        request.model,
+        upstream_status,
+        ",".join(finish_reasons) if finish_reasons else "none",
+        candidate_count,
+        usable_text_parts,
+        safe_error_category or "none",
+    )
 
 
 def provider_error_details(response: httpx.Response) -> tuple[str | None, str | None]:
@@ -140,28 +279,40 @@ def safe_provider_error(
     *,
     error_code: str | None = None,
     error_message: str | None = None,
-) -> str:
+) -> AIProviderError:
     code = (error_code or "").upper()
     message = (error_message or "").lower()
     if status_code == 401 or (
         "api key" in message and ("invalid" in message or "not valid" in message)
     ):
-        return "Provider API key is invalid"
+        return AIProviderError("Provider API key is invalid", http_status=401)
     if status_code == 403 or code == "PERMISSION_DENIED":
-        return "Provider permission denied for this key or model"
+        return AIProviderError(
+            "Provider permission denied for this key or model",
+            http_status=403,
+        )
     if status_code == 429:
-        return "Provider quota was exceeded"
+        return AIProviderError("Provider quota was exceeded", http_status=429)
     if status_code == 404 or code == "NOT_FOUND":
-        return "Configured Gemini model is unavailable"
+        return AIProviderError(
+            "Configured Gemini model is unavailable",
+            http_status=400,
+        )
     if status_code == 400:
         if "model" in message and (
             "not found" in message
             or "unavailable" in message
             or "unsupported" in message
         ):
-            return "Configured Gemini model is unavailable"
-        return "Gemini rejected the structured-output schema or request"
-    return "Provider returned an error"
+            return AIProviderError(
+                "Configured Gemini model is unavailable",
+                http_status=400,
+            )
+        return AIProviderError(
+            "Gemini rejected the structured-output schema or request",
+            http_status=400,
+        )
+    return AIProviderError("Provider returned an error", http_status=502)
 
 
 def sanitize_provider_message(message: str) -> str:
