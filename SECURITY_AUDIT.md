@@ -5,10 +5,10 @@ Reviewer stance: independent application-security reviewer and hackathon judge.
 
 ## Scope Reviewed
 
-- Implemented backend APIs: health, auth, users, website assets, scans, findings, baselines and
-  screenshot evidence.
+- Implemented backend APIs: health, auth, users, website assets, scans, findings, baselines,
+  screenshot/difference evidence, incidents, audit verification and AI configuration/analysis.
 - Implemented frontend: foundation dashboard, login/logout, website list/add/detail, scan polling,
-  baseline approval and scan detail.
+  baseline approval, scan detail, incident workflow, audit page and Administrator AI settings.
 - Demo target service.
 - Docker and deployment configuration.
 - Tests, README, progress and limitations documentation.
@@ -17,10 +17,10 @@ Reviewer stance: independent application-security reviewer and hackathon judge.
 
 ### C-01: PS-005 End-to-End Workflow Is Not Implemented
 
-Status: unresolved product-completeness gap.
+Status: fixed for the hackathon MVP scope.
 
-The required baseline-to-defacement-to-incident scenario does not currently work because these
-major systems are not implemented yet:
+The first audit found that the required baseline-to-defacement-to-incident scenario did not work
+because these major systems were missing:
 
 - Visual/content comparison.
 - Risk engine.
@@ -28,14 +28,13 @@ major systems are not implemented yet:
 - Tamper-evident audit chain.
 - AI remediation provider abstraction.
 
-Impact: the project cannot yet satisfy the PS-005 demonstration acceptance criteria or the
-attack-defence round. This is not a hidden bug in existing code; it is the next unfinished product
-scope after Milestones 4 and 5.
+Fix: implemented baseline comparison, title/text/domain checks, suspicious phrase detection,
+visual pHash and changed-pixel comparison, generated difference images, deterministic risk scoring,
+automatic incident creation, incident status/notes workflow and hash-chain audit verification.
 
-Fix status: partially fixed. Milestones 4 and 5 now implement SSRF-safe passive scanning,
-deterministic findings, screenshot capture and baseline approval. Visual comparison, incident
-workflow, tamper-evident audit-chain verification and AI remediation remain unresolved and are
-documented in `README.md`, `KNOWN_LIMITATIONS.md` and `PROGRESS.md`.
+Follow-up fix: Milestone 8 implements a real BYOK AI Incident Analyst with Gemini, OpenAI and
+OpenAI-compatible providers. No fake AI output is generated and deterministic checks are still not
+called AI.
 
 ## High Findings
 
@@ -116,18 +115,29 @@ file path and rejects path traversal if metadata is corrupted.
 
 ### M-04: Incident Workflow and Audit Chain Are Not Implemented
 
-Status: unresolved product gap.
+Status: fixed for the MVP.
 
-There are no incident APIs, no state-transition checks and no hash-chained audit records. Milestone 5
-writes a normal baseline-approval audit entry, but tamper-evident auditability remains future work
-and must not be claimed yet.
+Fix: added organization-scoped incident APIs, status transition checks, note creation, viewer
+read-only behavior, automatic incident creation from comparison risk and a per-organization
+hash-chained `audit_logs` table with `/api/audit/verify`.
 
 ### M-05: Prompt-Injection Defences Are Not Implemented
 
-Status: unresolved product gap.
+Status: fixed in code with BYOK provider configuration.
 
-No AI provider integration exists yet. Before AI is enabled, scanned page content must be treated as
-untrusted, bounded, structured and never executable.
+Milestone 8 adds encrypted organization-scoped AI configuration, real provider clients, bounded
+structured evidence, explicit prompt-injection protections and Pydantic response validation. The UI
+states when AI is unconfigured or disabled, and deterministic remediation remains available.
+
+### M-07: AI API Key Exposure Risk
+
+Status: fixed in code.
+
+AI provider keys must not be returned to the browser or stored in plaintext.
+
+Fix: added Fernet encryption derived from `APP_SECRET_KEY`, last-four-only UI/API display, no key
+storage on `AIAnalysis`, and tests proving GET responses and audit records do not include plaintext
+or encrypted keys.
 
 ### M-06: Registration Allows Private/Internal URLs
 
@@ -167,8 +177,9 @@ The frontend still does not use `dangerouslySetInnerHTML`, direct `innerHTML`, `
 
 Status: pass for current endpoints.
 
-User, website asset, scan, finding, baseline and screenshot records are filtered by
-`organization_id`; cross-organization direct object lookups return 404 in tests.
+User, website asset, scan, finding, baseline, screenshot, difference image, incident and audit
+records are filtered by `organization_id`; cross-organization direct object lookups return 404 in
+tests.
 
 ## Verification Summary
 
@@ -177,7 +188,7 @@ Pre-fix checks:
 - `make backend-test` passed, 17 tests.
 - `npm run typecheck` passed.
 - `npm run build` passed.
-- `docker --version` failed because Docker is not installed.
+- Historical pre-Docker check: Docker CLI was not installed at that point in the build.
 
 Post-security-audit checks:
 
@@ -186,11 +197,11 @@ Post-security-audit checks:
 - `npm run typecheck` passed.
 - `npm run build` passed.
 - `npm audit --omit=dev` passed, 0 vulnerabilities.
-- `docker build -t sentinelsight-ai:security-audit .` failed because Docker is not installed.
+- Historical pre-Docker check: Docker build was deferred until Docker became available.
 - Demo-flow attempt:
   - login succeeded,
   - website registration succeeded,
-  - baseline scan attempt failed with HTTP 405 because scan endpoints are not implemented.
+  - baseline scan attempt failed with HTTP 405 because scan endpoints were not implemented yet.
 
 Milestone 4/5 follow-up checks:
 
@@ -203,3 +214,33 @@ Milestone 4/5 follow-up checks:
 - Alembic upgrade through `202607160003` passed on SQLite.
 - `docker compose config` passed.
 - Docker build/runtime and real Docker-network demo scan are blocked by Docker daemon permissions.
+
+Milestone 6/7/7B follow-up checks:
+
+- `make backend-format` passed.
+- `make backend-lint` passed.
+- `make backend-test` passed, 67 tests.
+- `npm run typecheck` passed.
+- `npm run build` passed.
+- `npm audit --omit=dev` passed, 0 vulnerabilities after network approval.
+- `DATABASE_URL=sqlite:////tmp/sentinelsight_m67_audit.db ../.venv/bin/alembic upgrade head`
+  passed.
+- `docker compose config` passed.
+- `docker compose build`, `docker compose ps`, app logs and demo-target logs were blocked by host
+  Docker daemon permissions: the current user cannot access `/var/run/docker.sock`, and
+  passwordless sudo is unavailable.
+
+Milestone 8 follow-up checks:
+
+- `make backend-format` passed.
+- `make backend-lint` passed.
+- `make backend-test` passed, 84 tests.
+- `npm run typecheck` passed.
+- `npm run build` passed.
+- `npm audit --omit=dev` passed, 0 vulnerabilities after network approval.
+- Alembic fresh SQLite upgrade passed through `202607160005`.
+- `docker compose config` passed.
+- `docker compose build` remains blocked by host Docker daemon permissions, and passwordless sudo is
+  unavailable.
+- Real provider connection test was not run because no user-supplied API key was available in this
+  session.

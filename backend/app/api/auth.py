@@ -13,6 +13,7 @@ from app.schemas.users import UserRead
 from app.security.dependencies import CurrentUser, get_current_user
 from app.security.passwords import verify_password
 from app.security.tokens import AUTH_COOKIE_NAME, create_access_token
+from app.services.audit_log import create_audit_log
 from app.services.rate_limiter import login_rate_limiter
 from app.utils.time import utc_now
 
@@ -67,6 +68,15 @@ async def login(
             )
 
         user.last_login_at = utc_now()
+        create_audit_log(
+            db,
+            organization_id=user.organization_id,
+            user_id=user.id,
+            action="auth.login.success",
+            resource_type="user",
+            resource_id=user.id,
+            metadata={"email": user.email},
+        )
         db.commit()
         db.refresh(user)
 

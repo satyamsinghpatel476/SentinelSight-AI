@@ -7,11 +7,13 @@ import {
   deactivateWebsite,
   getWebsite,
   getWebsiteBaseline,
+  listIncidents,
   listWebsiteScans,
   screenshotUrl,
   startScan,
   updateWebsite,
   type Baseline,
+  type Incident,
   type Scan,
   type ScanStatus,
   type WebsiteAsset
@@ -26,6 +28,7 @@ export function WebsiteDetailPage() {
   const [asset, setAsset] = useState<WebsiteAsset | null>(null);
   const [scans, setScans] = useState<Scan[]>([]);
   const [baseline, setBaseline] = useState<Baseline | null>(null);
+  const [incidents, setIncidents] = useState<Incident[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -40,14 +43,16 @@ export function WebsiteDetailPage() {
     if (!websiteId || !user) {
       return;
     }
-    const [assetResponse, scansResponse, baselineResponse] = await Promise.all([
+    const [assetResponse, scansResponse, baselineResponse, incidentResponse] = await Promise.all([
       getWebsite(websiteId),
       listWebsiteScans(websiteId),
-      getWebsiteBaseline(websiteId)
+      getWebsiteBaseline(websiteId),
+      listIncidents()
     ]);
     setAsset(assetResponse);
     setScans(scansResponse);
     setBaseline(baselineResponse);
+    setIncidents(incidentResponse.filter((incident) => incident.website_asset_id === websiteId));
   }, [user, websiteId]);
 
   useEffect(() => {
@@ -92,7 +97,7 @@ export function WebsiteDetailPage() {
       void loadAll().catch(() => {
         setActionError("Unable to refresh scan status.");
       });
-    }, 2500);
+    }, 2000);
     return () => window.clearInterval(timer);
   }, [loadAll, polling]);
 
@@ -234,10 +239,12 @@ export function WebsiteDetailPage() {
 
         <article className="status-card">
           <div className="card-header">
-            <h2>Risk Category</h2>
+            <h2>Asset Category</h2>
             <StatusBadge label={formatStatusLabel(asset.risk_category)} tone="pending" />
           </div>
-          <p className="body-copy">{asset.contact_email}</p>
+          <p className="body-copy">
+            Registration metadata selected by the organization. Contact: {asset.contact_email}
+          </p>
         </article>
 
         <article className="status-card">
@@ -252,6 +259,21 @@ export function WebsiteDetailPage() {
             {latestScan
               ? `${latestScan.scan_type} scan created ${formatDate(latestScan.created_at)}`
               : "No scan has been started for this website."}
+          </p>
+        </article>
+
+        <article className="status-card">
+          <div className="card-header">
+            <h2>Latest Scan Risk</h2>
+            <StatusBadge
+              label={latestScan?.risk_level ? formatStatusLabel(latestScan.risk_level) : "Not calculated"}
+              tone={riskTone(latestScan?.risk_level ?? null)}
+            />
+          </div>
+          <p className="body-copy">
+            {latestScan?.risk_score !== null && latestScan?.risk_score !== undefined
+              ? `${latestScan.risk_score} evidence-based point(s)`
+              : "Run a scan to calculate current risk."}
           </p>
         </article>
 
@@ -278,6 +300,11 @@ export function WebsiteDetailPage() {
           >
             {polling ? "Scan running" : "Run Scan"}
           </button>
+        ) : null}
+        {latestScan ? (
+          <Link className="button button--secondary" to={`/scans/${latestScan.id}`}>
+            Open Latest Scan
+          </Link>
         ) : null}
         {canManageWebsite ? (
           <>
@@ -385,6 +412,44 @@ export function WebsiteDetailPage() {
           )}
         </section>
       </div>
+
+      <section className="panel panel--full" aria-labelledby="linked-incidents-heading">
+        <div className="card-header">
+          <h2 id="linked-incidents-heading">Linked Incidents</h2>
+          <StatusBadge
+            label={String(incidents.length)}
+            tone={incidents.length ? "blocked" : "good"}
+          />
+        </div>
+        {incidents.length ? (
+          <div className="table-wrap table-wrap--compact">
+            <table>
+              <thead>
+                <tr>
+                  <th>Incident</th>
+                  <th>Status</th>
+                  <th>Risk</th>
+                  <th>Created</th>
+                </tr>
+              </thead>
+              <tbody>
+                {incidents.map((incident) => (
+                  <tr key={incident.id}>
+                    <td>
+                      <Link to={`/incidents/${incident.id}`}>{incident.title}</Link>
+                    </td>
+                    <td>{formatStatusLabel(incident.status)}</td>
+                    <td>{incident.risk_score}</td>
+                    <td>{formatDate(incident.created_at)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <p className="body-copy">No incidents are linked to this website.</p>
+        )}
+      </section>
     </section>
   );
 }
@@ -397,6 +462,16 @@ function statusTone(status: ScanStatus | undefined): "good" | "pending" | "block
     return "blocked";
   }
   return "pending";
+}
+
+function riskTone(riskLevel: string | null): "good" | "pending" | "blocked" {
+  if (riskLevel === "low") {
+    return "good";
+  }
+  if (riskLevel === "moderate" || riskLevel === null) {
+    return "pending";
+  }
+  return "blocked";
 }
 
 function formatDate(value: string | null): string {

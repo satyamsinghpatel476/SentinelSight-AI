@@ -25,6 +25,9 @@ export function AppShell({ children }: AppShellProps) {
         <nav className="nav-list">
           <NavLink to="/">Foundation</NavLink>
           <NavLink to="/websites">Websites</NavLink>
+          <NavLink to="/incidents">Incidents</NavLink>
+          <NavLink to="/audit">Audit</NavLink>
+          <NavLink to="/settings/ai">Settings</NavLink>
           <NavLink to="/login">Login</NavLink>
         </nav>
 

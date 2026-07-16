@@ -52,6 +52,16 @@ export type WebsiteAssetInput = {
 export type ScanStatus = "queued" | "running" | "completed" | "failed";
 export type ScanType = "baseline" | "comparison";
 export type FindingSeverity = "low" | "moderate" | "high" | "critical";
+export type RiskLevel = "low" | "moderate" | "high" | "critical";
+export type IncidentStatus = "open" | "investigating" | "resolved" | "false_positive";
+export type AIProvider = "gemini" | "openai" | "openai_compatible";
+export type AIAnalysisStatus = "pending" | "completed" | "failed";
+
+export type RiskBreakdownItem = {
+  reason: string;
+  points: number;
+  evidence: string;
+};
 
 export type Scan = {
   id: string;
@@ -77,6 +87,27 @@ export type Scan = {
   screenshot_width: number | null;
   screenshot_height: number | null;
   screenshot_perceptual_hash: string | null;
+  baseline_scan_id: string | null;
+  title_changed: boolean | null;
+  baseline_title: string | null;
+  current_title: string | null;
+  text_similarity_percent: number | null;
+  visual_change_percent: number | null;
+  visual_change_level: string | null;
+  perceptual_hash_distance: number | null;
+  difference_image_filename: string | null;
+  difference_image_content_type: string | null;
+  comparison_error: string | null;
+  baseline_external_script_domains: string[] | null;
+  current_external_script_domains: string[] | null;
+  new_external_script_domains: string[] | null;
+  baseline_external_iframe_domains: string[] | null;
+  current_external_iframe_domains: string[] | null;
+  new_external_iframe_domains: string[] | null;
+  suspicious_phrases: string[] | null;
+  risk_score: number | null;
+  risk_level: RiskLevel | null;
+  risk_breakdown: RiskBreakdownItem[] | null;
   started_at: string | null;
   completed_at: string | null;
   scanned_at: string | null;
@@ -109,6 +140,117 @@ export type Baseline = {
   is_active: boolean;
   created_at: string;
   scan: Scan;
+};
+
+export type IncidentNote = {
+  id: string;
+  organization_id: string;
+  incident_id: string;
+  user_id: string;
+  content: string;
+  created_at: string;
+};
+
+export type Incident = {
+  id: string;
+  organization_id: string;
+  website_asset_id: string;
+  scan_id: string;
+  title: string;
+  description: string;
+  severity: FindingSeverity;
+  risk_score: number;
+  risk_breakdown: RiskBreakdownItem[] | null;
+  status: IncidentStatus;
+  assigned_to: string | null;
+  resolution_notes: string | null;
+  created_at: string;
+  updated_at: string;
+  resolved_at: string | null;
+  website_asset: WebsiteAsset | null;
+  scan: Scan | null;
+  notes: IncidentNote[];
+  findings: Finding[];
+};
+
+export type IncidentUpdate = {
+  status?: IncidentStatus;
+  resolution_notes?: string | null;
+  assigned_to?: string | null;
+};
+
+export type AuditLog = {
+  id: string;
+  organization_id: string;
+  user_id: string;
+  action: string;
+  resource_type: string;
+  resource_id: string;
+  metadata_json: Record<string, unknown> | null;
+  previous_hash: string;
+  entry_hash: string;
+  created_at: string;
+};
+
+export type AuditVerification = {
+  valid: boolean;
+  records_checked: number;
+  first_broken_record_id: string | null;
+};
+
+export type AIConfiguration = {
+  provider: AIProvider | null;
+  model: string | null;
+  base_url: string | null;
+  is_enabled: boolean;
+  timeout_seconds: number;
+  has_api_key: boolean;
+  api_key_last_four: string | null;
+};
+
+export type AIStatus = {
+  is_configured: boolean;
+  provider: AIProvider | null;
+  model: string | null;
+  is_enabled: boolean;
+  has_api_key: boolean;
+};
+
+export type AIConfigurationInput = {
+  provider: AIProvider | null;
+  model: string | null;
+  api_key?: string | null;
+  base_url?: string | null;
+  is_enabled: boolean;
+  timeout_seconds: number;
+};
+
+export type AIConnectionTestResult = {
+  success: boolean;
+  message: string;
+  provider: AIProvider | null;
+  model: string | null;
+};
+
+export type AIAnalysis = {
+  id: string;
+  organization_id: string;
+  scan_id: string | null;
+  incident_id: string | null;
+  requested_by: string;
+  provider: AIProvider;
+  model: string;
+  prompt_version: string;
+  incident_summary: string | null;
+  priority_explanation: string | null;
+  immediate_actions: string[] | null;
+  long_term_actions: string[] | null;
+  possible_false_positive_factors: string[] | null;
+  confidence_note: string | null;
+  status: AIAnalysisStatus;
+  error_message: string | null;
+  created_at: string;
+  completed_at: string | null;
 };
 
 export class ApiError extends Error {
@@ -239,4 +381,94 @@ export function getWebsiteBaseline(websiteId: string): Promise<Baseline | null> 
 
 export function screenshotUrl(scanId: string): string {
   return `/api/evidence/screenshots/${scanId}`;
+}
+
+export function differenceImageUrl(scanId: string): string {
+  return `/api/evidence/differences/${scanId}`;
+}
+
+export function listIncidents(): Promise<Incident[]> {
+  return requestJson<Incident[]>("/api/incidents");
+}
+
+export function getIncident(incidentId: string): Promise<Incident> {
+  return requestJson<Incident>(`/api/incidents/${incidentId}`);
+}
+
+export function updateIncident(
+  incidentId: string,
+  payload: IncidentUpdate
+): Promise<Incident> {
+  return requestJson<Incident>(`/api/incidents/${incidentId}`, {
+    method: "PATCH",
+    body: JSON.stringify(payload)
+  });
+}
+
+export function addIncidentNote(
+  incidentId: string,
+  content: string
+): Promise<Incident> {
+  return requestJson<Incident>(`/api/incidents/${incidentId}/notes`, {
+    method: "POST",
+    body: JSON.stringify({ content })
+  });
+}
+
+export function listAuditLogs(): Promise<AuditLog[]> {
+  return requestJson<AuditLog[]>("/api/audit");
+}
+
+export function verifyAuditChain(): Promise<AuditVerification> {
+  return requestJson<AuditVerification>("/api/audit/verify");
+}
+
+export function getAIStatus(): Promise<AIStatus> {
+  return requestJson<AIStatus>("/api/ai/status");
+}
+
+export function getAIConfig(): Promise<AIConfiguration> {
+  return requestJson<AIConfiguration>("/api/ai/config");
+}
+
+export function saveAIConfig(payload: AIConfigurationInput): Promise<AIConfiguration> {
+  return requestJson<AIConfiguration>("/api/ai/config", {
+    method: "PUT",
+    body: JSON.stringify(payload)
+  });
+}
+
+export function removeAIKey(): Promise<AIConfiguration> {
+  return requestJson<AIConfiguration>("/api/ai/config/key", {
+    method: "DELETE"
+  });
+}
+
+export function testAIConfig(
+  payload: AIConfigurationInput
+): Promise<AIConnectionTestResult> {
+  return requestJson<AIConnectionTestResult>("/api/ai/config/test", {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+}
+
+export function getScanAIAnalysis(scanId: string): Promise<AIAnalysis | null> {
+  return requestJson<AIAnalysis | null>(`/api/scans/${scanId}/ai-analysis`);
+}
+
+export function generateScanAIAnalysis(scanId: string): Promise<AIAnalysis> {
+  return requestJson<AIAnalysis>(`/api/scans/${scanId}/ai-analysis`, {
+    method: "POST"
+  });
+}
+
+export function getIncidentAIAnalysis(incidentId: string): Promise<AIAnalysis | null> {
+  return requestJson<AIAnalysis | null>(`/api/incidents/${incidentId}/ai-analysis`);
+}
+
+export function generateIncidentAIAnalysis(incidentId: string): Promise<AIAnalysis> {
+  return requestJson<AIAnalysis>(`/api/incidents/${incidentId}/ai-analysis`, {
+    method: "POST"
+  });
 }

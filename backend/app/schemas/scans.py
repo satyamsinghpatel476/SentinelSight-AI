@@ -5,7 +5,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.core.enums import FindingSeverity, ScanStatus, ScanType
+from app.core.enums import FindingSeverity, RiskLevel, ScanStatus, ScanType
 
 
 class ScanCreate(BaseModel):
@@ -36,6 +36,27 @@ class ScanRead(BaseModel):
     screenshot_width: int | None
     screenshot_height: int | None
     screenshot_perceptual_hash: str | None
+    baseline_scan_id: str | None
+    title_changed: bool | None
+    baseline_title: str | None
+    current_title: str | None
+    text_similarity_percent: float | None
+    visual_change_percent: float | None
+    visual_change_level: str | None
+    perceptual_hash_distance: int | None
+    difference_image_filename: str | None
+    difference_image_content_type: str | None
+    comparison_error: str | None
+    baseline_external_script_domains: list[str] | None
+    current_external_script_domains: list[str] | None
+    new_external_script_domains: list[str] | None
+    baseline_external_iframe_domains: list[str] | None
+    current_external_iframe_domains: list[str] | None
+    new_external_iframe_domains: list[str] | None
+    suspicious_phrases: list[str] | None
+    risk_score: int | None
+    risk_level: RiskLevel | None
+    risk_breakdown: list[dict[str, Any]] | None
     started_at: datetime | None
     completed_at: datetime | None
     scanned_at: datetime | None

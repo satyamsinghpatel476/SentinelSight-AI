@@ -8,7 +8,12 @@ from app.core.database import SessionLocal
 from app.core.enums import UserRole
 from app.models import Base, Organization, User
 from app.security.passwords import hash_password
-from app.services.rate_limiter import login_rate_limiter, scan_rate_limiter
+from app.services.rate_limiter import (
+    ai_analysis_rate_limiter,
+    ai_test_rate_limiter,
+    login_rate_limiter,
+    scan_rate_limiter,
+)
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 from sqlalchemy.pool import StaticPool
@@ -26,6 +31,8 @@ def isolated_database() -> Generator[None]:
     Base.metadata.create_all(bind=engine)
     login_rate_limiter.clear()
     scan_rate_limiter.clear()
+    ai_test_rate_limiter.clear()
+    ai_analysis_rate_limiter.clear()
 
     try:
         yield
@@ -34,6 +41,8 @@ def isolated_database() -> Generator[None]:
         SessionLocal.configure(bind=previous_bind)
         login_rate_limiter.clear()
         scan_rate_limiter.clear()
+        ai_test_rate_limiter.clear()
+        ai_analysis_rate_limiter.clear()
 
 
 @dataclass(frozen=True)

@@ -1,13 +1,17 @@
 # Security Model
 
-SentinelSight AI is designed for authorized, passive website monitoring. The project will enforce authentication, role-based authorization, organization isolation, SSRF protection, safe scanning limits and a tamper-evident audit trail as the implementation milestones progress.
+SentinelSight AI is designed for authorized, passive website monitoring. The project enforces
+authentication, role-based authorization, organization isolation, SSRF protection, safe scanning
+limits and a tamper-evident audit trail for the implemented MVP workflow.
 
 ## Current Milestone
 
-Milestones 1 through 5 include application security headers, environment-based configuration, no
+Milestones 1 through 7B include application security headers, environment-based configuration, no
 checked-in secrets, health endpoints without sensitive details, Argon2 password hashing, HttpOnly
 cookie authentication, login rate limiting, backend-enforced role checks, organization-scoped user
-and website management, passive scanning, screenshot evidence capture and baseline approval.
+and website management, passive scanning, screenshot evidence capture, baseline approval,
+comparison scans, incident workflow, hash-chain audit verification and encrypted organization-scoped
+BYOK AI configuration.
 
 ## URL Registration Controls
 
@@ -27,6 +31,9 @@ and website management, passive scanning, screenshot evidence capture and baseli
 - Browser screenshot capture blocks `file://` and forbidden subresource URLs.
 - Raw target HTML is not stored or displayed.
 - Screenshot retrieval is authenticated and scoped by organization ownership of the scan.
+- Difference-image retrieval is authenticated and scoped by organization ownership of the scan.
+- Baseline comparisons store bounded metadata and generated evidence filenames, never raw target
+  HTML or user-controlled filesystem paths.
 - The controlled `http://demo-target:9000` exception is development/test-only, disabled by default
   in `.env.example`, enabled by local Compose for the demo target, limited to the exact
   `demo-target` hostname/scheme/port and rejected in production.
@@ -39,6 +46,25 @@ and website management, passive scanning, screenshot evidence capture and baseli
 - Viewers and Security Analysts cannot use Administrator-only user-management APIs.
 - Records owned by another organization are hidden with 404 where appropriate.
 - Scan, finding, baseline and screenshot records are also scoped by `organization_id`.
+- Incident, incident note, difference image and audit-log records are also scoped by
+  `organization_id`.
+- Viewers can read incidents but cannot run scans, approve baselines, add notes or change incident
+  status.
+- Only Administrators can view or change AI provider configuration.
+- Administrators and Security Analysts can request AI analysis on completed organization-owned scans
+  or incidents; Viewers can only view previously generated analysis.
+
+## AI Security Controls
+
+- Deterministic risk scoring and rule-based findings are not represented as AI.
+- AI provider API keys are encrypted server-side and never returned by APIs after saving.
+- API keys, encrypted API keys and authorization headers are forbidden from audit metadata.
+- AI prompts send bounded structured evidence only, not raw unlimited HTML.
+- Scanned website content is treated as untrusted evidence and the system prompt forbids following
+  instructions found in scanned content.
+- Provider output must match the structured schema before it is displayed.
+- Failed or invalid provider responses are stored as safe failed states without displaying raw
+  provider output.
 
 ## Ethical Use
 
@@ -52,5 +78,5 @@ Report security issues privately to the project maintainers. Include reproductio
 
 - `.env` files are local only and must not be committed.
 - Production deployments must provide a strong `APP_SECRET_KEY`.
-- Visual comparison, incident workflow and tamper-evident audit-chain verification are still future
-  milestones and must not be claimed as complete.
+- AI Incident Analysis requires an evaluator-supplied API key and exact model configured from the
+  frontend. Deterministic scoring and remediation guidance do not depend on AI.

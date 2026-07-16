@@ -26,14 +26,16 @@ def analyze_html_content(
 
     soup = BeautifulSoup(html, "html.parser")
     title = soup.title.string.strip() if soup.title and soup.title.string else None
+    external_script_domains = external_domains(soup, final_url, "script", "src")
+    external_iframe_domains = external_domains(soup, final_url, "iframe", "src")
     visible_text = extract_visible_text(soup)[:visible_text_max_chars]
     return ContentAnalysis(
         page_title=title[:512] if title else None,
         visible_text=visible_text,
         visible_text_hash=sha256_text(visible_text),
         html_hash=sha256_text(html),
-        external_script_domains=external_domains(soup, final_url, "script", "src"),
-        external_iframe_domains=external_domains(soup, final_url, "iframe", "src"),
+        external_script_domains=external_script_domains,
+        external_iframe_domains=external_iframe_domains,
     )
 
 

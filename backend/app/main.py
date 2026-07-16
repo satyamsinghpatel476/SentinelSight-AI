@@ -6,8 +6,11 @@ from fastapi import FastAPI
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
+from app.api.ai import router as ai_router
+from app.api.audit import router as audit_router
 from app.api.auth import router as auth_router
 from app.api.health import router as health_router
+from app.api.incidents import router as incidents_router
 from app.api.scans import router as scans_router
 from app.api.users import router as users_router
 from app.api.websites import router as websites_router
@@ -28,7 +31,10 @@ def create_app() -> FastAPI:
     app.middleware("http")(enforce_same_origin_for_cookie_auth)
     app.middleware("http")(enforce_request_body_limit)
     app.include_router(auth_router, prefix="/api")
+    app.include_router(ai_router, prefix="/api")
+    app.include_router(audit_router, prefix="/api")
     app.include_router(health_router, prefix="/api")
+    app.include_router(incidents_router, prefix="/api")
     app.include_router(scans_router, prefix="/api")
     app.include_router(users_router, prefix="/api")
     app.include_router(websites_router, prefix="/api")

@@ -115,3 +115,48 @@ class ScanRateLimiter:
 
 
 scan_rate_limiter = ScanRateLimiter()
+
+
+class ActionRateLimiter:
+    def __init__(self) -> None:
+        self._attempts: dict[str, list[float]] = defaultdict(list)
+
+    def check_and_record(
+        self,
+        *,
+        key: str,
+        limit: int,
+        window_seconds: int,
+        max_keys: int,
+        message: str,
+    ) -> None:
+        if key not in self._attempts and len(self._attempts) >= max_keys:
+            self._prune_oldest_key()
+
+        now = utc_now().timestamp()
+        window_start = now - window_seconds
+        self._attempts[key] = [
+            attempt for attempt in self._attempts[key] if attempt >= window_start
+        ]
+        if len(self._attempts[key]) >= limit:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail=message,
+            )
+        self._attempts[key].append(now)
+
+    def clear(self) -> None:
+        self._attempts.clear()
+
+    def _prune_oldest_key(self) -> None:
+        if not self._attempts:
+            return
+        oldest_key = min(
+            self._attempts,
+            key=lambda item: min(self._attempts[item]) if self._attempts[item] else 0,
+        )
+        self._attempts.pop(oldest_key, None)
+
+
+ai_test_rate_limiter = ActionRateLimiter()
+ai_analysis_rate_limiter = ActionRateLimiter()

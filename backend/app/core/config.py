@@ -25,6 +25,10 @@ class Settings(BaseSettings):
     ai_model: str = ""
     ai_api_key: str = ""
     ai_timeout_seconds: int = 20
+    ai_test_rate_limit_user_attempts: int = 5
+    ai_analysis_rate_limit_user_attempts: int = 10
+    ai_rate_limit_window_seconds: int = 3_600
+    ai_rate_limit_max_keys: int = 10_000
 
     scan_connect_timeout_seconds: int = 5
     scan_read_timeout_seconds: int = 10

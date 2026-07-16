@@ -2,12 +2,14 @@
 
 ## Current Status
 
-Milestones 1 through 5 are complete. A security audit hardening pass has also been completed. The
-next incomplete milestone is Milestone 6 - baseline comparison, risk scoring and incident workflow.
+Milestones 1 through 8 are complete in code. A security audit hardening pass has also been
+completed. The next incomplete milestone is final Docker runtime verification, a real provider AI
+test with a user-supplied key and the full controlled normal-to-defaced demonstration from the
+browser.
 
-Environment note: Docker CLI is installed (`Docker version 29.6.1`), and `docker compose config`
-passes. Docker build/runtime validation could not be completed in this session because the current
-user cannot access `/var/run/docker.sock`, and passwordless sudo is not available.
+Environment note: Docker CLI is installed. Docker build/runtime verification is being rerun after
+the Milestone 6/7/7B implementation. `docker compose config` passes, but build/runtime access is
+blocked for this user by `/var/run/docker.sock` permissions and passwordless sudo is unavailable.
 
 ## Milestone Log
 
@@ -51,8 +53,8 @@ Milestone 1 verification commands run:
 - Demo target boot check on `127.0.0.1:9001` - passed:
   - `GET /mode` returned `{"mode": "normal"}`.
   - `GET /` returned 200.
-- `docker compose config` - not run successfully because `docker` is not installed in this
-  workspace (`/bin/bash: docker: command not found`).
+- Historical Milestone 1 note: Docker verification was deferred at that time. Docker CLI is now
+  installed and later milestone verification uses Docker Compose directly.
 
 Note: pytest plugin autoload is disabled for project tests because this environment attempts to
 auto-load an unrelated global ROS pytest plugin with missing dependencies.
@@ -262,20 +264,11 @@ Milestone 4/5 verification commands run:
   Docker-network controlled demo-target scan were not run because the Docker daemon is inaccessible
   to the current user/session.
 
-Remaining limitations after Milestone 5:
+Remaining limitations after Milestone 5 were addressed by the Milestone 6/7/7B implementation below,
+except for AI provider integration and distributed production job infrastructure.
 
-- Visual baseline comparison is not implemented yet.
-- Risk scoring beyond deterministic finding risk points is not implemented yet.
-- Incident creation and incident workflow are not implemented yet.
-- Tamper-evident hash-chained audit logging is not implemented yet; Milestone 5 writes a normal
-  baseline approval audit entry only.
-- AI remediation remains disabled and unimplemented.
-- The scan background runner and rate limiter are in-process MVP mechanisms, not distributed job
-  infrastructure.
-- Docker runtime/demo validation still needs to be rerun after fixing Docker daemon permissions for
-  the development user.
-
-Next incomplete milestone: Milestone 6 - baseline comparison, risk scoring and incident workflow.
+Next incomplete milestone after Milestone 5 was Milestone 6 - baseline comparison, risk scoring and
+incident workflow.
 
 ### Security Audit and Hardening Pass
 
@@ -314,11 +307,176 @@ Next incomplete milestone: Milestone 6 - baseline comparison, risk scoring and i
   - `npm audit --omit=dev` from `frontend/` - passed, 0 vulnerabilities.
 - Historical note: Docker build verification in that pass could not be run because `docker` was not
   installed in the workspace then.
-- Current note after Milestones 4/5: Docker CLI is installed, but daemon access is blocked for the
-  current user/session by `/var/run/docker.sock` permissions.
-- Current demo-flow status after Milestones 4/5:
+- Historical note after Milestones 4/5: Docker CLI was installed, but full runtime validation was
+  deferred to final verification.
+- Historical demo-flow status after Milestones 4/5:
   - scanning, screenshot capture and baseline approval are implemented and covered by backend tests,
   - the complete baseline-to-defacement-to-incident demonstration still cannot be claimed until
     visual comparison, incident workflow and risk escalation are implemented,
   - the real Docker-network controlled demo-target scan still needs to be rerun after Docker daemon
     permissions are fixed.
+
+### Milestone 6 - Baseline Comparison and Defacement Detection
+
+- Status: complete in code on 2026-07-16.
+- Added comparison fields to `Scan` plus Alembic migration
+  `202607160004_comparison_incidents_audit.py`.
+- New successful scans automatically become comparison scans when an active approved baseline
+  exists.
+- Added title comparison, bounded visible-text similarity, suspicious phrase detection, external
+  script-domain comparison and iframe-domain comparison.
+- Added screenshot visual comparison with pHash distance, changed-pixel percentage, change-level
+  classification and generated UUID difference images.
+- Fixed content analysis so external script/iframe domains are captured before script/style tags are
+  removed for visible-text extraction.
+- Added deterministic risk engine with explainable risk breakdown and score clamping.
+- Added secure authenticated organization-scoped difference-image endpoint:
+  `GET /api/evidence/differences/{scan_id}`.
+- Updated Scan Detail UI with baseline/current/difference screenshots, comparison metrics, risk
+  score, risk level, risk breakdown, suspicious phrases and new domains.
+- Updated Website Detail UI to distinguish Asset Category from Latest Scan Risk and to link related
+  incidents.
+
+### Milestone 7 - Incident Management
+
+- Status: complete in code on 2026-07-16.
+- Added `Incident` and `IncidentNote` models.
+- Added automatic incident creation for high-risk scans, suspicious defacement phrases or major
+  visual change plus new script domain.
+- Added organization-scoped APIs:
+  - `GET /api/incidents`,
+  - `GET /api/incidents/{incident_id}`,
+  - `PATCH /api/incidents/{incident_id}`,
+  - `POST /api/incidents/{incident_id}/notes`.
+- Added backend RBAC:
+  - Administrators and Security Analysts can change incident status and add notes,
+  - Viewers are read-only,
+  - cross-organization incident IDs return 404.
+- Added minimal status workflow for open, investigating, resolved and false_positive.
+- Added Incidents and Incident Detail frontend pages.
+
+### Milestone 7B - Tamper-Evident Audit Trail
+
+- Status: complete in code on 2026-07-16.
+- Added `AuditLog` model with per-organization hash chaining and defined genesis hash.
+- Added audit events for successful login, website creation, scan requested/completed/failed,
+  baseline approval, comparison completion, incident creation, incident status changes, incident
+  resolution/false positive/reopen and incident notes.
+- Added `/api/audit` and `/api/audit/verify`.
+- Added Audit frontend page with verification status and hash prefixes.
+- Normalized audit timestamps for stable verification across SQLite and PostgreSQL and flushed each
+  audit entry as it is appended so multiple entries in one transaction chain correctly.
+
+Milestone 6/7/7B verification commands run:
+
+- Pre-implementation `make backend-test` - passed, 51 tests.
+- Pre-implementation `npm run typecheck` from `frontend/` - passed.
+- Pre-implementation `npm run build` from `frontend/` - passed.
+- `make backend-format` - passed.
+- `make backend-lint` - passed.
+- `make backend-test` - passed, 67 tests.
+- `npm run typecheck` from `frontend/` - passed.
+- `npm run build` from `frontend/` - passed.
+- `npm audit --omit=dev` from `frontend/` - passed, 0 vulnerabilities after network approval.
+- `DATABASE_URL=sqlite:////tmp/sentinelsight_m67_audit.db ../.venv/bin/alembic upgrade head`
+  from `backend/` - passed.
+- `docker compose config` - passed.
+- `docker compose build` - blocked by Docker daemon socket permissions:
+  `permission denied while trying to connect to the docker API at unix:///var/run/docker.sock`.
+- `sudo -n docker compose build` - blocked because sudo requires a password.
+- `docker compose ps`, `docker compose logs --tail=150 app` and
+  `docker compose logs --tail=100 demo-target` - blocked by the same Docker daemon socket
+  permissions.
+
+Remaining limitations after Milestone 7B:
+
+- AI provider integration was still incomplete at Milestone 7B; no fake AI output was generated.
+- Scans remain one-page passive checks.
+- Screenshot comparison is heuristic and dynamic content may cause false positives.
+- The background scanner and rate limiter are in-process MVP mechanisms.
+- Full Docker runtime and browser demo validation still need to be rerun by a user with Docker
+  daemon access.
+
+Next incomplete milestone after Milestone 7B was Milestone 8 - real BYOK AI Incident Analyst.
+
+### Milestone 8 - Required Real BYOK AI Incident Analyst
+
+- Status: complete in code on 2026-07-16.
+- Preserved deterministic scanner/risk/incident behavior and labelled it separately from AI:
+  - Deterministic Risk Score,
+  - Rule-Based Security Finding,
+  - AI Incident Analysis.
+- Added organization-scoped `AIConfiguration` model and migration
+  `202607160005_ai_configuration_analysis.py`.
+- Added server-side API key encryption using `cryptography` Fernet with key material derived from
+  `APP_SECRET_KEY`.
+- API keys are never returned by configuration APIs after saving and are not stored on AI analysis
+  records.
+- Added `AIAnalysis` model storing provider, exact model, prompt version, status, safe error,
+  generated timestamp and structured response fields.
+- Added provider abstraction under `backend/app/services/ai/`:
+  - Gemini provider,
+  - OpenAI provider,
+  - OpenAI-compatible provider with configurable base URL.
+- Added Administrator-only AI configuration APIs:
+  - `GET /api/ai/config`,
+  - `PUT /api/ai/config`,
+  - `DELETE /api/ai/config/key`,
+  - `POST /api/ai/config/test`.
+- Added safe AI status endpoint:
+  - `GET /api/ai/status`.
+- Added AI analysis APIs:
+  - `POST /api/scans/{scan_id}/ai-analysis`,
+  - `GET /api/scans/{scan_id}/ai-analysis`,
+  - `POST /api/incidents/{incident_id}/ai-analysis`,
+  - `GET /api/incidents/{incident_id}/ai-analysis`.
+- Added RBAC:
+  - only Administrators can view/change AI configuration,
+  - Administrators and Security Analysts can request AI analysis,
+  - Viewers can only view previous analysis.
+- Added prompt-injection protections:
+  - sends bounded structured evidence,
+  - treats website text as untrusted,
+  - forbids following scanned-content instructions,
+  - validates provider JSON with Pydantic,
+  - stores safe failed state on invalid output without fabricating fallback text.
+- Added audit events for AI configuration creation/changes/key lifecycle/test requests/test
+  results and AI analysis request/completion/failure, without secret metadata.
+- Added frontend Settings → AI Configuration page with:
+  - enabled toggle,
+  - provider dropdown,
+  - password API-key input,
+  - exact model input,
+  - optional base URL,
+  - timeout,
+  - Save Configuration,
+  - Test Connection,
+  - Remove API Key,
+  - last-four-only key status.
+- Added AI Incident Analysis cards to Scan Detail and Incident Detail with cost warning, provider
+  and model display, generate action, loading/error states and structured result display.
+
+Milestone 8 verification commands run:
+
+- `make backend-format` - passed.
+- `make backend-lint` - passed.
+- `make backend-test` - passed, 84 tests.
+- `npm run typecheck` from `frontend/` - passed.
+- `npm run build` from `frontend/` - passed.
+- `npm audit --omit=dev` from `frontend/` - passed, 0 vulnerabilities after network approval.
+- `DATABASE_URL=sqlite:////tmp/sentinelsight_m8_ai.db ../.venv/bin/alembic upgrade head`
+  from `backend/` - passed through `202607160005`.
+- `docker compose config` - passed.
+- `docker compose build` - blocked by Docker daemon socket permissions:
+  `permission denied while trying to connect to the docker API at unix:///var/run/docker.sock`.
+- `sudo -n docker compose build` - blocked because sudo requires a password.
+
+Remaining limitations after Milestone 8:
+
+- A real provider connection test was not performed because no evaluator/user API key was provided
+  in this session. Automated tests use mocked provider calls and do not claim real-provider success.
+- Docker runtime and browser demo validation are still blocked by host Docker daemon permissions for
+  the current user/session.
+
+Next incomplete milestone: final Docker runtime verification, real user-supplied-provider AI test
+and complete controlled demo-target normal-to-defaced browser demonstration.

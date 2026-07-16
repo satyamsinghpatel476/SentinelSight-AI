@@ -3,19 +3,25 @@ from __future__ import annotations
 import threading
 from collections.abc import Iterable
 
-from sqlalchemy import delete
+from sqlalchemy import delete, select
+from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.core.database import SessionLocal
-from app.core.enums import ScanStatus
+from app.core.enums import ScanStatus, ScanType
+from app.models.baseline import Baseline
 from app.models.finding import Finding
 from app.models.scan import Scan
+from app.scanners.comparison_analyzer import ComparisonResult, compare_scan_to_baseline
 from app.scanners.content_analyzer import analyze_html_content
 from app.scanners.header_analyzer import PassiveFinding, analyze_security_headers
 from app.scanners.http_scanner import HttpScanError, fetch_target
+from app.scanners.risk_engine import calculate_risk
 from app.scanners.screenshot_capture import ScreenshotError, capture_screenshot
 from app.scanners.tls_analyzer import analyze_tls_certificate
 from app.security.url_safety import UnsafeUrlError, UrlSafetyPolicy
+from app.services.audit_log import create_audit_log
+from app.services.incidents import create_incident_if_needed
 from app.utils.time import utc_now
 
 _scan_semaphore_guard = threading.Lock()
@@ -123,8 +129,38 @@ def complete_scan(
         now = utc_now()
         scan.scanned_at = now
         scan.completed_at = now
+        all_findings = list(findings)
 
-        for item in findings:
+        baseline = active_baseline_for_scan(db, scan)
+        comparison: ComparisonResult | None = None
+        if baseline and baseline.scan_id != scan.id:
+            baseline_scan = db.get(Scan, baseline.scan_id)
+            if baseline_scan is not None:
+                scan.scan_type = ScanType.comparison
+                comparison = compare_scan_to_baseline(
+                    baseline_scan, scan, get_settings()
+                )
+                apply_comparison_result(scan, comparison)
+                all_findings.extend(comparison.findings)
+        else:
+            scan.scan_type = ScanType.baseline
+
+        all_findings = dedupe_findings(all_findings)
+        risk = calculate_risk(
+            visual_change_level=scan.visual_change_level,
+            visual_change_percent=scan.visual_change_percent,
+            text_similarity_percent=scan.text_similarity_percent,
+            title_changed=scan.title_changed,
+            suspicious_phrases=scan.suspicious_phrases or [],
+            new_external_script_domains=scan.new_external_script_domains or [],
+            new_external_iframe_domains=scan.new_external_iframe_domains or [],
+            findings=all_findings,
+        )
+        scan.risk_score = risk.risk_score
+        scan.risk_level = risk.risk_level
+        scan.risk_breakdown = risk.risk_breakdown
+
+        for item in all_findings:
             db.add(
                 Finding(
                     organization_id=scan.organization_id,
@@ -139,6 +175,29 @@ def complete_scan(
                     risk_points=item.risk_points,
                 )
             )
+        create_audit_log(
+            db,
+            organization_id=scan.organization_id,
+            user_id=scan.requested_by,
+            action="scan.completed",
+            resource_type="scan",
+            resource_id=scan.id,
+            metadata={"risk_score": scan.risk_score, "scan_type": scan.scan_type.value},
+        )
+        if scan.scan_type == ScanType.comparison:
+            create_audit_log(
+                db,
+                organization_id=scan.organization_id,
+                user_id=scan.requested_by,
+                action="comparison.completed",
+                resource_type="scan",
+                resource_id=scan.id,
+                metadata={
+                    "baseline_scan_id": scan.baseline_scan_id,
+                    "risk_score": scan.risk_score,
+                },
+            )
+        create_incident_if_needed(db, scan=scan)
         db.commit()
 
 
@@ -150,6 +209,15 @@ def fail_scan(scan_id: str, reason: str) -> None:
         scan.status = ScanStatus.failed
         scan.failure_reason = reason[:1024]
         scan.completed_at = utc_now()
+        create_audit_log(
+            db,
+            organization_id=scan.organization_id,
+            user_id=scan.requested_by,
+            action="scan.failed",
+            resource_type="scan",
+            resource_id=scan.id,
+            metadata={"reason": scan.failure_reason},
+        )
         db.commit()
 
 
@@ -166,3 +234,53 @@ def scan_semaphore(max_concurrent: int) -> threading.BoundedSemaphore:
             _scan_semaphore = threading.BoundedSemaphore(size)
             _scan_semaphore_size = size
         return _scan_semaphore
+
+
+def active_baseline_for_scan(db: Session, scan: Scan) -> Baseline | None:
+    return db.scalar(
+        select(Baseline).where(
+            Baseline.organization_id == scan.organization_id,
+            Baseline.website_asset_id == scan.website_asset_id,
+            Baseline.is_active.is_(True),
+        )
+    )
+
+
+def apply_comparison_result(scan: Scan, comparison: ComparisonResult) -> None:
+    scan.baseline_scan_id = comparison.baseline_scan_id
+    scan.title_changed = comparison.title_changed
+    scan.baseline_title = comparison.baseline_title
+    scan.current_title = comparison.current_title
+    scan.text_similarity_percent = comparison.text_similarity_percent
+    scan.comparison_error = comparison.comparison_error
+    scan.baseline_external_script_domains = comparison.baseline_external_script_domains
+    scan.current_external_script_domains = comparison.current_external_script_domains
+    scan.new_external_script_domains = comparison.new_external_script_domains
+    scan.baseline_external_iframe_domains = comparison.baseline_external_iframe_domains
+    scan.current_external_iframe_domains = comparison.current_external_iframe_domains
+    scan.new_external_iframe_domains = comparison.new_external_iframe_domains
+    scan.suspicious_phrases = comparison.suspicious_phrases
+    if comparison.visual_result is not None:
+        scan.visual_change_percent = comparison.visual_result.visual_change_percent
+        scan.visual_change_level = comparison.visual_result.visual_change_level
+        scan.perceptual_hash_distance = (
+            comparison.visual_result.perceptual_hash_distance
+        )
+        scan.difference_image_filename = (
+            comparison.visual_result.difference_image_filename
+        )
+        scan.difference_image_content_type = (
+            comparison.visual_result.difference_image_content_type
+        )
+
+
+def dedupe_findings(findings: list[PassiveFinding]) -> list[PassiveFinding]:
+    seen: set[tuple[str, str]] = set()
+    deduped: list[PassiveFinding] = []
+    for item in findings:
+        key = (item.finding_type, item.evidence)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(item)
+    return deduped

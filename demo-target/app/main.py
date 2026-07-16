@@ -115,12 +115,7 @@ def defaced_page() -> str:
           h1 { margin: 0 0 12px; font-size: 44px; }
           p { line-height: 1.6; }
         </style>
-        <script type="application/json" id="simulated-unknown-script">
-          {
-            "src": "https://demo-unknown-script.invalid/app.js",
-            "note": "Simulated reference only. Not executed."
-          }
-        </script>
+        <script src="https://demo-unknown-script.invalid/app.js"></script>
       </head>
       <body>
         <header>

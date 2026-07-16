@@ -9,7 +9,7 @@ from sqlalchemy.orm import joinedload
 
 from app.core.config import get_settings
 from app.core.database import SessionLocal
-from app.core.enums import ScanStatus, UserRole
+from app.core.enums import ScanStatus, ScanType, UserRole
 from app.models.audit_entry import AuditEntry
 from app.models.baseline import Baseline
 from app.models.finding import Finding
@@ -20,8 +20,10 @@ from app.scanners.screenshot_capture import (
     ScreenshotError,
     screenshot_path_for_filename,
 )
+from app.scanners.visual_comparison import difference_path_for_filename
 from app.schemas.scans import BaselineRead, FindingRead, ScanCreate, ScanRead
 from app.security.dependencies import CurrentUser, get_current_user, require_roles
+from app.services.audit_log import create_audit_log
 from app.services.rate_limiter import scan_rate_limiter
 from app.utils.time import utc_now
 
@@ -90,15 +92,34 @@ async def start_scan(
         scan_rate_limiter.check_and_record(
             current_user.id, current_user.organization_id
         )
+        active_baseline = db.scalar(
+            select(Baseline).where(
+                Baseline.organization_id == current_user.organization_id,
+                Baseline.website_asset_id == asset.id,
+                Baseline.is_active.is_(True),
+            )
+        )
         scan = Scan(
             organization_id=current_user.organization_id,
             website_asset_id=asset.id,
             requested_by=current_user.id,
-            scan_type=payload.scan_type,
+            scan_type=(
+                ScanType.baseline if active_baseline is None else ScanType.comparison
+            ),
             status=ScanStatus.queued,
             requested_url=asset.normalized_url,
         )
         db.add(scan)
+        db.flush()
+        create_audit_log(
+            db,
+            organization_id=current_user.organization_id,
+            user_id=current_user.id,
+            action="scan.requested",
+            resource_type="scan",
+            resource_id=scan.id,
+            metadata={"website_asset_id": asset.id, "scan_type": scan.scan_type.value},
+        )
         db.commit()
         db.refresh(scan)
         background_tasks.add_task(run_scan_background, scan.id)
@@ -218,6 +239,21 @@ async def approve_baseline(
                 },
             )
         )
+        create_audit_log(
+            db,
+            organization_id=current_user.organization_id,
+            user_id=current_user.id,
+            action="baseline.approved",
+            resource_type="baseline",
+            resource_id=baseline.id,
+            metadata={
+                "scan_id": scan.id,
+                "website_asset_id": scan.website_asset_id,
+                "previous_baseline_ids": [
+                    previous.id for previous in previous_baselines
+                ],
+            },
+        )
         db.commit()
         created = db.scalar(
             select(Baseline)
@@ -283,4 +319,35 @@ async def get_screenshot(
     return Response(
         content=path.read_bytes(),
         media_type=scan.screenshot_content_type or "image/png",
+    )
+
+
+@router.get("/evidence/differences/{scan_id}", response_model=None)
+async def get_difference_image(
+    scan_id: str,
+    current_user: AuthenticatedUser,
+) -> Response:
+    scan = get_scan_in_current_organization(scan_id, current_user)
+    if not scan.difference_image_filename:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Difference image not found",
+        )
+    try:
+        path = difference_path_for_filename(
+            get_settings(), scan.difference_image_filename
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Difference image not found",
+        ) from exc
+    if not path.exists() or not path.is_file():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Difference image not found",
+        )
+    return Response(
+        content=path.read_bytes(),
+        media_type=scan.difference_image_content_type or "image/png",
     )

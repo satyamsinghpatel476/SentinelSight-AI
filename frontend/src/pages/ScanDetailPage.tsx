@@ -3,13 +3,17 @@ import { Link, useParams } from "react-router-dom";
 
 import {
   ApiError,
+  differenceImageUrl,
   getScan,
   getScanFindings,
+  listIncidents,
   screenshotUrl,
   type Finding,
+  type Incident,
   type Scan,
   type ScanStatus
 } from "../api/client";
+import { AIAnalysisCard } from "../components/AIAnalysisCard";
 import { StatusBadge } from "../components/StatusBadge";
 import { useAuth } from "../hooks/useAuth";
 import { formatStatusLabel } from "../utils/format";
@@ -19,6 +23,7 @@ export function ScanDetailPage() {
   const { user, loading: authLoading } = useAuth();
   const [scan, setScan] = useState<Scan | null>(null);
   const [findings, setFindings] = useState<Finding[]>([]);
+  const [incident, setIncident] = useState<Incident | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -41,9 +46,13 @@ export function ScanDetailPage() {
           getScan(id),
           getScanFindings(id)
         ]);
+        const incidentResponse = await listIncidents();
         if (!cancelled) {
           setScan(scanResponse);
           setFindings(findingsResponse);
+          setIncident(
+            incidentResponse.find((item) => item.scan_id === scanResponse.id) ?? null
+          );
         }
       } catch (caughtError) {
         if (!cancelled) {
@@ -68,6 +77,23 @@ export function ScanDetailPage() {
     () => findings.filter((finding) => finding.type.startsWith("tls_")),
     [findings]
   );
+
+  useEffect(() => {
+    if (!scanId || !user || !scan || !["queued", "running"].includes(scan.status)) {
+      return;
+    }
+    const timer = window.setInterval(() => {
+      void Promise.all([getScan(scanId), getScanFindings(scanId)])
+        .then(([scanResponse, findingsResponse]) => {
+          setScan(scanResponse);
+          setFindings(findingsResponse);
+        })
+        .catch(() => {
+          setError("Unable to refresh scan status.");
+        });
+    }, 2000);
+    return () => window.clearInterval(timer);
+  }, [scan, scanId, user]);
 
   if (!authLoading && !user) {
     return (
@@ -144,11 +170,16 @@ export function ScanDetailPage() {
         </article>
         <article className="status-card">
           <div className="card-header">
-            <h2>Findings</h2>
-            <StatusBadge label={String(findings.length)} tone={findings.length ? "pending" : "good"} />
+            <h2>Latest Scan Risk</h2>
+            <StatusBadge
+              label={scan.risk_level ? formatStatusLabel(scan.risk_level) : "Pending"}
+              tone={riskTone(scan.risk_level)}
+            />
           </div>
           <p className="body-copy">
-            {tlsFindings.length ? `${tlsFindings.length} TLS-related finding(s)` : "No TLS findings"}
+            {scan.risk_score !== null
+              ? `${scan.risk_score} calculated evidence point(s)`
+              : "Risk is calculated after scan completion."}
           </p>
         </article>
       </div>
@@ -157,6 +188,32 @@ export function ScanDetailPage() {
         <div className="alert" role="alert">
           <strong>Scan failed safely.</strong>
           <span>{scan.failure_reason}</span>
+        </div>
+      ) : null}
+
+      {incident ? (
+        <div className="alert" role="alert">
+          <strong>Incident created.</strong>
+          <span>
+            <Link to={`/incidents/${incident.id}`}>Open generated incident</Link>
+          </span>
+        </div>
+      ) : null}
+
+      {scan.status === "completed" && !scan.baseline_scan_id ? (
+        <div className="empty-state">
+          <h2>Initial scan — no baseline comparison available</h2>
+          <p>Approve this successful scan as the trusted baseline before running a comparison.</p>
+        </div>
+      ) : null}
+
+      {scan.baseline_scan_id ? (
+        <div className="empty-state">
+          <h2>Comparison scan</h2>
+          <p>
+            This scan was compared against the active approved baseline and scored from
+            deterministic evidence.
+          </p>
         </div>
       ) : null}
 
@@ -182,38 +239,160 @@ export function ScanDetailPage() {
               <dt>Screenshot pHash</dt>
               <dd>{scan.screenshot_perceptual_hash ?? "Not captured"}</dd>
             </div>
+            <div>
+              <dt>AI availability</dt>
+              <dd>AI remediation is disabled. Deterministic remediation guidance remains available.</dd>
+            </div>
           </dl>
-          {scan.screenshot_filename ? (
-            <img
-              className="screenshot-preview"
-              src={screenshotUrl(scan.id)}
-              alt="Scan screenshot"
-            />
-          ) : null}
         </section>
 
-        <section className="panel" aria-labelledby="headers-heading">
+        <section className="panel" aria-labelledby="comparison-heading">
           <div className="card-header">
-            <h2 id="headers-heading">Headers Summary</h2>
+            <h2 id="comparison-heading">Comparison Summary</h2>
           </div>
-          {scan.response_headers ? (
-            <dl className="compact-list">
-              {Object.entries(scan.response_headers).map(([name, value]) => (
-                <div key={name}>
-                  <dt>{name}</dt>
-                  <dd>{Array.isArray(value) ? value.join(", ") : String(value)}</dd>
-                </div>
-              ))}
-            </dl>
-          ) : (
-            <p className="body-copy">No response headers captured.</p>
-          )}
+          <dl className="compact-list">
+            <div>
+              <dt>Visual change</dt>
+              <dd>
+                {scan.visual_change_percent !== null
+                  ? `${formatNumber(scan.visual_change_percent)}% (${scan.visual_change_level ?? "unclassified"})`
+                  : "Not available"}
+              </dd>
+            </div>
+            <div>
+              <dt>Text similarity</dt>
+              <dd>
+                {scan.text_similarity_percent !== null
+                  ? `${formatNumber(scan.text_similarity_percent)}%`
+                  : "Not available"}
+              </dd>
+            </div>
+            <div>
+              <dt>Perceptual hash distance</dt>
+              <dd>{scan.perceptual_hash_distance ?? "Not available"}</dd>
+            </div>
+            <div>
+              <dt>Title change</dt>
+              <dd>
+                {scan.title_changed === null
+                  ? "Not available"
+                  : scan.title_changed
+                    ? `${scan.baseline_title ?? "Untitled"} -> ${scan.current_title ?? "Untitled"}`
+                    : "No title change detected"}
+              </dd>
+            </div>
+            <div>
+              <dt>Suspicious phrases</dt>
+              <dd>{scan.suspicious_phrases?.join(", ") || "None detected"}</dd>
+            </div>
+            <div>
+              <dt>New script domains</dt>
+              <dd>{scan.new_external_script_domains?.join(", ") || "None detected"}</dd>
+            </div>
+            <div>
+              <dt>New iframe domains</dt>
+              <dd>{scan.new_external_iframe_domains?.join(", ") || "None detected"}</dd>
+            </div>
+            {scan.comparison_error ? (
+              <div>
+                <dt>Comparison warning</dt>
+                <dd>{scan.comparison_error}</dd>
+              </div>
+            ) : null}
+          </dl>
         </section>
       </div>
 
+      <section className="panel panel--full" aria-labelledby="screenshots-heading">
+        <div className="card-header">
+          <h2 id="screenshots-heading">Screenshots</h2>
+        </div>
+        <div className="evidence-grid">
+          {scan.baseline_scan_id ? (
+            <figure>
+              <figcaption>Approved baseline</figcaption>
+              <img
+                className="screenshot-preview"
+                src={screenshotUrl(scan.baseline_scan_id)}
+                alt="Approved baseline screenshot"
+              />
+            </figure>
+          ) : null}
+          {scan.screenshot_filename ? (
+            <figure>
+              <figcaption>Current scan</figcaption>
+              <img
+                className="screenshot-preview"
+                src={screenshotUrl(scan.id)}
+                alt="Current scan screenshot"
+              />
+            </figure>
+          ) : null}
+          {scan.difference_image_filename ? (
+            <figure>
+              <figcaption>Difference image</figcaption>
+              <img
+                className="screenshot-preview"
+                src={differenceImageUrl(scan.id)}
+                alt="Highlighted visual difference"
+              />
+            </figure>
+          ) : null}
+        </div>
+      </section>
+
+      <section className="panel panel--full" aria-labelledby="risk-heading">
+        <div className="card-header">
+          <h2 id="risk-heading">Deterministic Risk Score</h2>
+          <StatusBadge
+            label={scan.risk_score !== null ? String(scan.risk_score) : "Pending"}
+            tone={riskTone(scan.risk_level)}
+          />
+        </div>
+        {scan.risk_breakdown?.length ? (
+          <dl className="compact-list">
+            {scan.risk_breakdown.map((item) => (
+              <div key={`${item.reason}-${item.evidence}`}>
+                <dt>
+                  {item.reason} (+{item.points})
+                </dt>
+                <dd>{item.evidence}</dd>
+              </div>
+            ))}
+          </dl>
+        ) : (
+          <p className="body-copy">No risk factors have been recorded for this scan.</p>
+        )}
+      </section>
+
+      <AIAnalysisCard
+        subjectId={scan.id}
+        subjectType="scan"
+        canGenerate={user?.role === "administrator" || user?.role === "security_analyst"}
+        completed={scan.status === "completed"}
+      />
+
+      <section className="panel panel--full" aria-labelledby="headers-heading">
+        <div className="card-header">
+          <h2 id="headers-heading">Headers Summary</h2>
+        </div>
+        {scan.response_headers ? (
+          <dl className="compact-list">
+            {Object.entries(scan.response_headers).map(([name, value]) => (
+              <div key={name}>
+                <dt>{name}</dt>
+                <dd>{Array.isArray(value) ? value.join(", ") : String(value)}</dd>
+              </div>
+            ))}
+          </dl>
+        ) : (
+          <p className="body-copy">No response headers captured.</p>
+        )}
+      </section>
+
       <section className="panel panel--full" aria-labelledby="findings-heading">
         <div className="card-header">
-          <h2 id="findings-heading">Security Findings</h2>
+          <h2 id="findings-heading">Rule-Based Security Findings</h2>
         </div>
         {findings.length ? (
           <div className="table-wrap">
@@ -256,4 +435,20 @@ function statusTone(status: ScanStatus): "good" | "pending" | "blocked" {
     return "blocked";
   }
   return "pending";
+}
+
+function riskTone(riskLevel: string | null): "good" | "pending" | "blocked" {
+  if (riskLevel === "low") {
+    return "good";
+  }
+  if (riskLevel === "moderate" || riskLevel === null) {
+    return "pending";
+  }
+  return "blocked";
+}
+
+function formatNumber(value: number): string {
+  return value.toLocaleString(undefined, {
+    maximumFractionDigits: 2
+  });
 }

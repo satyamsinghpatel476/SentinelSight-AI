@@ -17,6 +17,7 @@ from app.schemas.websites import (
 )
 from app.security.dependencies import CurrentUser, get_current_user, require_roles
 from app.security.url_normalization import normalize_public_url
+from app.services.audit_log import create_audit_log
 
 router = APIRouter(prefix="/websites", tags=["websites"])
 
@@ -92,6 +93,16 @@ async def create_website(
         )
         db.add(asset)
         try:
+            db.flush()
+            create_audit_log(
+                db,
+                organization_id=current_user.organization_id,
+                user_id=current_user.id,
+                action="website.created",
+                resource_type="website",
+                resource_id=asset.id,
+                metadata={"normalized_url": normalized_url},
+            )
             db.commit()
         except IntegrityError as exc:
             db.rollback()
