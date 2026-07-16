@@ -34,11 +34,14 @@ def analyze_tls_certificate(
             finding(
                 "tls_certificate_unavailable",
                 "TLS certificate could not be inspected",
-                "The scanner could not read the HTTPS certificate.",
+                (
+                    "The scanner could not read the HTTPS certificate. This is "
+                    "informational unless other evidence indicates a TLS weakness."
+                ),
                 FindingSeverity.low,
                 f"Host: {parsed.hostname}",
-                "Verify the certificate chain and TLS listener configuration.",
-                4,
+                "Verify network reachability before treating this as a TLS issue.",
+                0,
             )
         ]
 

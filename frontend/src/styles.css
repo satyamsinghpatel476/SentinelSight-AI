@@ -217,6 +217,10 @@ h2 {
   gap: 16px;
 }
 
+.dashboard-secondary {
+  margin-top: 16px;
+}
+
 .status-card {
   min-height: 210px;
   border: 1px solid #d7dee8;
@@ -401,6 +405,13 @@ td {
 td a {
   color: #0f766e;
   font-weight: 800;
+}
+
+.muted-cell {
+  display: block;
+  margin-top: 3px;
+  color: #64748b;
+  font-size: 0.82rem;
 }
 
 .action-row {

@@ -403,7 +403,7 @@ export function ScanDetailPage() {
                   <th>Title</th>
                   <th>Evidence</th>
                   <th>Remediation</th>
-                  <th>Risk</th>
+                  <th>Score Contribution</th>
                 </tr>
               </thead>
               <tbody>

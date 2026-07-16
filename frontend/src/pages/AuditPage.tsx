@@ -126,7 +126,16 @@ export function AuditPage() {
               {records.map((record) => (
                 <tr key={record.id}>
                   <td>{formatDate(record.created_at)}</td>
-                  <td>{record.user_id}</td>
+                  <td>
+                    {record.user_name || record.user_email ? (
+                      <>
+                        {record.user_name ?? record.user_email}
+                        <span className="muted-cell">{record.user_email}</span>
+                      </>
+                    ) : (
+                      record.user_id
+                    )}
+                  </td>
                   <td>{record.action}</td>
                   <td>
                     {record.resource_type}:{record.resource_id}

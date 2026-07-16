@@ -28,7 +28,7 @@ export function AppShell({ children }: AppShellProps) {
           <NavLink to="/incidents">Incidents</NavLink>
           <NavLink to="/audit">Audit</NavLink>
           <NavLink to="/settings/ai">Settings</NavLink>
-          <NavLink to="/login">Login</NavLink>
+          {!user ? <NavLink to="/login">Login</NavLink> : null}
         </nav>
 
         <div className="session-panel">

@@ -121,6 +121,23 @@ Current verification note: `docker compose config` passes. `docker compose build
 logs could not be completed from this session because the current user cannot access
 `/var/run/docker.sock`, and passwordless sudo is unavailable.
 
+## Demo Readiness Notes
+
+- The Foundation route is now an operational security dashboard with live health, website, scan,
+  incident, audit-chain and AI-configuration status where the current user is authorized to see it.
+- Authenticated users no longer see the Login navigation item.
+- Website Assets labels the configured business classification as Asset Category and shows Latest
+  Scan Risk from scan history when available.
+- Scan details show finding Score Contribution values that match the final Deterministic Risk
+  Score after clamping. Inconclusive informational checks, including TLS certificate inspection
+  unavailability, contribute zero points unless reliable weakness evidence is present.
+- The Audit page shows the acting user's name/email when available and still falls back to the
+  stable user identifier when the user record is unavailable.
+- Latest verification in this session: backend format, backend lint, backend tests, frontend
+  typecheck, frontend production build, frontend production dependency audit and
+  `docker compose config` passed. Docker image build/runtime verification remains blocked by host
+  Docker socket permissions for this account.
+
 ## Environment Variables
 
 Copy `.env.example` to `.env` for local development and replace placeholder values. Do not commit real secrets.
@@ -233,6 +250,10 @@ domain appear together. This is not called blockchain.
 ## Controlled Demo Flow
 
 Use only the controlled Docker demo target for the defacement demonstration.
+
+Prerequisite: the operator running this flow must have Docker daemon access. In this workspace,
+Compose configuration validates, but image build/runtime checks are blocked because the current
+account cannot access `/var/run/docker.sock`.
 
 1. Start Docker:
    ```bash

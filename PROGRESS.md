@@ -2,14 +2,14 @@
 
 ## Current Status
 
-Milestones 1 through 8 are complete in code. A security audit hardening pass has also been
-completed. The next incomplete milestone is final Docker runtime verification, a real provider AI
-test with a user-supplied key and the full controlled normal-to-defaced demonstration from the
-browser.
+Milestones 1 through 8 are complete in code. A security audit hardening pass and the latest
+demo-readiness consistency pass have also been completed. The next incomplete milestone is final
+Docker runtime verification, a real provider AI test with a user-supplied key and the full
+controlled normal-to-defaced demonstration from the browser.
 
-Environment note: Docker CLI is installed. Docker build/runtime verification is being rerun after
-the Milestone 6/7/7B implementation. `docker compose config` passes, but build/runtime access is
-blocked for this user by `/var/run/docker.sock` permissions and passwordless sudo is unavailable.
+Environment note: Docker CLI is installed. `docker compose config` passes, but build/runtime access
+is blocked for this user by `/var/run/docker.sock` permissions and passwordless sudo is
+unavailable.
 
 ## Milestone Log
 
@@ -477,6 +477,61 @@ Remaining limitations after Milestone 8:
   in this session. Automated tests use mocked provider calls and do not claim real-provider success.
 - Docker runtime and browser demo validation are still blocked by host Docker daemon permissions for
   the current user/session.
+
+Next incomplete milestone: final Docker runtime verification, real user-supplied-provider AI test
+and complete controlled demo-target normal-to-defaced browser demonstration.
+
+### Demo-Readiness Consistency Pass
+
+- Status: complete in code on 2026-07-16.
+- Replaced the outdated Foundation page with an operational security dashboard:
+  - removed the old "Milestone 1" and "Scanner not implemented" language,
+  - added live health/readiness, website, scan, incident, audit-chain and AI configuration status
+    where the authenticated user is authorized to read it.
+- Hid the Login navigation item while a user is authenticated.
+- Updated the Website Assets table:
+  - renamed the configured business classification column from Risk to Asset Category,
+  - added Latest Scan Risk from existing scan history when available.
+- Fixed deterministic risk consistency:
+  - persisted finding risk points now represent the actual score contribution after clamping,
+  - the sum of displayed finding score contributions matches the final Deterministic Risk Score,
+  - higher-impact evidence is scored first so major comparison causes remain visible in the
+    breakdown,
+  - capped findings display zero contribution once the score reaches 100.
+- Treated TLS certificate inspection failure as informational:
+  - `tls_certificate_unavailable` now contributes zero points,
+  - it is not presented as a TLS weakness unless a reliable certificate problem is actually
+    observed.
+- Updated the Audit page and API response to show the acting user's name/email when available,
+  with the UUID retained as fallback.
+- Confirmed AI configuration remains frontend/admin-driven:
+  - safe config responses do not expose plaintext or encrypted keys,
+  - Test Connection uses the selected provider/model path,
+  - Generate AI Analysis uses the saved provider/model,
+  - deterministic scanning remains labelled separately from AI.
+
+Demo-readiness verification commands run:
+
+- `make backend-format` - passed.
+- `make backend-lint` - passed.
+- `make backend-test` - passed, 85 tests.
+- `npm run typecheck` from `frontend/` - passed.
+- `npm run build` from `frontend/` - passed.
+- `npm audit --omit=dev` from `frontend/` - passed, 0 vulnerabilities after network approval.
+- `docker compose config --quiet` - passed.
+- `git diff --check` - passed.
+- `docker compose build` - blocked by Docker Buildx sandbox write restrictions until rerun outside
+  the sandbox, then blocked by Docker daemon socket permissions:
+  `permission denied while trying to connect to the docker API at unix:///var/run/docker.sock`.
+- `sudo -n docker compose build` - blocked because sudo requires a password.
+
+Remaining limitations after the demo-readiness pass:
+
+- The full Docker browser demonstration could not be run in this session because the current user
+  cannot access the Docker daemon.
+- A real AI provider Test Connection and Generate AI Analysis flow could not be manually verified
+  because no evaluator/user provider API key was supplied. Automated tests continue to use mocked
+  provider calls and do not claim real-provider success.
 
 Next incomplete milestone: final Docker runtime verification, real user-supplied-provider AI test
 and complete controlled demo-target normal-to-defaced browser demonstration.

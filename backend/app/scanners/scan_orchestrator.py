@@ -145,7 +145,7 @@ def complete_scan(
         else:
             scan.scan_type = ScanType.baseline
 
-        all_findings = dedupe_findings(all_findings)
+        all_findings = prioritize_findings(dedupe_findings(all_findings))
         risk = calculate_risk(
             visual_change_level=scan.visual_change_level,
             visual_change_percent=scan.visual_change_percent,
@@ -160,7 +160,9 @@ def complete_scan(
         scan.risk_level = risk.risk_level
         scan.risk_breakdown = risk.risk_breakdown
 
-        for item in all_findings:
+        for item, risk_points in zip(
+            all_findings, risk.finding_point_contributions, strict=True
+        ):
             db.add(
                 Finding(
                     organization_id=scan.organization_id,
@@ -172,7 +174,7 @@ def complete_scan(
                     severity=item.severity,
                     evidence=item.evidence,
                     remediation=item.remediation,
-                    risk_points=item.risk_points,
+                    risk_points=risk_points,
                 )
             )
         create_audit_log(
@@ -284,3 +286,9 @@ def dedupe_findings(findings: list[PassiveFinding]) -> list[PassiveFinding]:
         seen.add(key)
         deduped.append(item)
     return deduped
+
+
+def prioritize_findings(findings: list[PassiveFinding]) -> list[PassiveFinding]:
+    """Score higher-impact evidence first so clamping keeps clear causes visible."""
+
+    return sorted(findings, key=lambda item: item.risk_points, reverse=True)

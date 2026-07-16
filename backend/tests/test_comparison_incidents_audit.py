@@ -4,6 +4,7 @@ import asyncio
 from pathlib import Path
 
 import httpx
+import pytest
 from app.core.config import Settings, get_settings
 from app.core.database import SessionLocal
 from app.core.enums import (
@@ -27,6 +28,7 @@ from app.scanners.http_scanner import HttpScanResult
 from app.scanners.risk_engine import calculate_risk, risk_level_for_score
 from app.scanners.scan_orchestrator import run_scan
 from app.scanners.screenshot_capture import ScreenshotResult
+from app.scanners.tls_analyzer import analyze_tls_certificate
 from app.scanners.visual_comparison import compare_screenshots
 from app.services.audit_log import create_audit_log, verify_audit_chain
 from app.services.incidents import create_incident_if_needed
@@ -114,6 +116,51 @@ def test_risk_engine_breakdown_clamp_and_levels() -> None:
         new_external_iframe_domains=["frames.example"],
         findings=[
             finding(
+                "visual_change",
+                "Major visual change",
+                "Screenshot differs",
+                FindingSeverity.high,
+                "42.80% meaningful screenshot change",
+                "Review highlighted difference.",
+                35,
+            ),
+            finding(
+                "suspicious_defacement_phrase",
+                "Suspicious defacement phrase detected",
+                "Phrase found",
+                FindingSeverity.high,
+                "Detected phrase: hacked by",
+                "Review deployment history.",
+                25,
+            ),
+            finding(
+                "visible_text_changed",
+                "Visible page text changed",
+                "Text changed",
+                FindingSeverity.high,
+                "Similarity: 20.00%",
+                "Review content changes.",
+                15,
+            ),
+            finding(
+                "new_external_script_domain",
+                "New external JavaScript domain detected",
+                "Script domain found",
+                FindingSeverity.high,
+                "demo-unknown-script.invalid",
+                "Review introduced script.",
+                15,
+            ),
+            finding(
+                "new_external_iframe_domain",
+                "New external iframe domain detected",
+                "Iframe domain found",
+                FindingSeverity.moderate,
+                "frames.example",
+                "Review introduced iframe.",
+                12,
+            ),
+            finding(
                 "missing_content_security_policy",
                 "Missing CSP",
                 "No CSP",
@@ -121,12 +168,14 @@ def test_risk_engine_breakdown_clamp_and_levels() -> None:
                 "missing",
                 "add CSP",
                 8,
-            )
+            ),
         ],
     )
 
     assert result.risk_score == 100
     assert result.risk_level == RiskLevel.critical
+    assert sum(result.finding_point_contributions) == result.risk_score
+    assert result.finding_point_contributions[-1] == 0
     assert any(
         item["reason"] == "Major visual change" for item in result.risk_breakdown
     )
@@ -134,6 +183,21 @@ def test_risk_engine_breakdown_clamp_and_levels() -> None:
     assert risk_level_for_score(25) == RiskLevel.moderate
     assert risk_level_for_score(50) == RiskLevel.high
     assert risk_level_for_score(75) == RiskLevel.critical
+
+
+def test_tls_inspection_failure_is_informational(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_expiry(*args: object, **kwargs: object):
+        raise OSError("network blocked")
+
+    monkeypatch.setattr(
+        "app.scanners.tls_analyzer.fetch_certificate_expiry", fake_expiry
+    )
+    findings = analyze_tls_certificate("https://example.com/", 1)
+    assert len(findings) == 1
+    assert findings[0].finding_type == "tls_certificate_unavailable"
+    assert findings[0].risk_points == 0
 
 
 def test_baseline_comparison_uses_active_baseline(

@@ -1,7 +1,13 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 
-import { ApiError, listWebsites, type WebsiteAsset } from "../api/client";
+import {
+  ApiError,
+  listWebsiteScans,
+  listWebsites,
+  type Scan,
+  type WebsiteAsset
+} from "../api/client";
 import { StatusBadge } from "../components/StatusBadge";
 import { useAuth } from "../hooks/useAuth";
 import { formatStatusLabel } from "../utils/format";
@@ -9,6 +15,7 @@ import { formatStatusLabel } from "../utils/format";
 export function WebsiteAssetsPage() {
   const { user, loading: authLoading } = useAuth();
   const [assets, setAssets] = useState<WebsiteAsset[]>([]);
+  const [latestScanByAsset, setLatestScanByAsset] = useState<Record<string, Scan | null>>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -27,8 +34,25 @@ export function WebsiteAssetsPage() {
       setError(null);
       try {
         const response = await listWebsites();
+        const scansByAsset = await Promise.all(
+          response.map(async (asset) => ({
+            assetId: asset.id,
+            scans: await listWebsiteScans(asset.id)
+          }))
+        );
         if (!cancelled) {
           setAssets(response);
+          setLatestScanByAsset(
+            Object.fromEntries(
+              scansByAsset.map((item) => [
+                item.assetId,
+                item.scans
+                  .slice()
+                  .sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at))[0] ??
+                  null
+              ])
+            )
+          );
         }
       } catch (caughtError) {
         if (!cancelled) {
@@ -101,7 +125,8 @@ export function WebsiteAssetsPage() {
               <tr>
                 <th>Name</th>
                 <th>URL</th>
-                <th>Risk</th>
+                <th>Asset Category</th>
+                <th>Latest Scan Risk</th>
                 <th>Monitoring</th>
                 <th>Contact</th>
               </tr>
@@ -114,6 +139,7 @@ export function WebsiteAssetsPage() {
                   </td>
                   <td>{asset.normalized_url}</td>
                   <td>{formatStatusLabel(asset.risk_category)}</td>
+                  <td>{latestScanLabel(latestScanByAsset[asset.id])}</td>
                   <td>
                     <StatusBadge
                       label={asset.monitoring_enabled ? "Enabled" : "Disabled"}
@@ -129,4 +155,14 @@ export function WebsiteAssetsPage() {
       ) : null}
     </section>
   );
+}
+
+function latestScanLabel(scan: Scan | null | undefined): string {
+  if (!scan) {
+    return "Not scanned";
+  }
+  if (scan.status !== "completed") {
+    return formatStatusLabel(scan.status);
+  }
+  return scan.risk_level ? formatStatusLabel(scan.risk_level) : "Not calculated";
 }

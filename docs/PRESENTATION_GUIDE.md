@@ -8,13 +8,19 @@ scan is passive, SSRF-protected and organization-scoped.
 
 ## Three-Minute Demo Sequence
 
+Prerequisite: run this sequence from an account that can access the Docker daemon. In the current
+workspace session, `docker compose config` passes but `docker compose build` and runtime checks are
+blocked by `/var/run/docker.sock` permissions.
+
 1. Start Docker Compose and open `http://127.0.0.1:8000`.
 2. Log in as the Administrator demo user.
-3. Add `http://demo-target:9000` as an authorized website.
-4. Keep the demo target in normal mode and run the first scan.
-5. Open the scan detail page, show the screenshot and passive findings, then approve it as the
+3. Open the Security Dashboard and show API/database health, website count, latest scan status,
+   incident status, audit-chain verification and AI configuration status.
+4. Add `http://demo-target:9000` as an authorized website.
+5. Keep the demo target in normal mode and run the first scan.
+6. Open the scan detail page, show the screenshot and passive findings, then approve it as the
    active baseline.
-6. Switch the demo target to defaced mode with:
+7. Switch the demo target to defaced mode with:
    ```bash
    curl -X POST \
      -H "X-Demo-Secret: $DEMO_TARGET_TOGGLE_SECRET" \
@@ -22,17 +28,19 @@ scan is passive, SSRF-protected and organization-scoped.
      -d '{"mode":"defaced"}' \
      http://127.0.0.1:9000/admin/toggle
    ```
-7. Run the second scan and open the comparison scan detail page.
-8. Show the baseline screenshot, current screenshot, highlighted difference image, visual change
-   percentage, text similarity, suspicious phrase, new script-domain finding and risk breakdown.
-9. If the evaluator supplies an API key, open Settings → AI Configuration, select provider, enter
+8. Run the second scan and open the comparison scan detail page.
+9. Show the baseline screenshot, current screenshot, highlighted difference image, visual change
+   percentage, text similarity, suspicious phrase, new script-domain finding, Deterministic Risk
+   Score and score-contribution breakdown.
+10. If the evaluator supplies an API key, open Settings → AI Configuration, select provider, enter
    the exact model, test the connection and save.
-10. On the completed scan or incident, click Generate AI Analysis and show the exact provider/model
+11. On the completed scan or incident, click Generate AI Analysis and show the exact provider/model
    stored with the result.
-11. Open the generated incident, add a note, move it to Investigating, add resolution notes and
+12. Open the generated incident, add a note, move it to Investigating, add resolution notes and
    resolve it.
-12. Open Audit and show the valid tamper-evident hash-chain verification.
-13. Restore normal mode after the demo.
+13. Open Audit and show user name/email, event details and valid tamper-evident hash-chain
+   verification.
+14. Restore normal mode after the demo.
 
 ## Judge Talking Points
 
@@ -42,7 +50,9 @@ scan is passive, SSRF-protected and organization-scoped.
 - Viewers cannot run scans, approve baselines or modify incidents; backend RBAC enforces this.
 - Cross-organization object access returns 404.
 - Raw target HTML is never rendered in the UI.
-- Risk scoring is deterministic and explainable; it is not represented as AI.
+- Risk scoring is deterministic and explainable; it is not represented as AI. Informational checks,
+  such as an inconclusive TLS inspection, contribute zero points unless reliable weakness evidence
+  exists.
 - AI Incident Analysis uses a real Bring Your Own Key provider configured by an Administrator in the
   frontend. No key is bundled in the repository.
 - The exact provider and model are shown on every generated AI analysis.
@@ -61,4 +71,6 @@ No. It is a tamper-evident hash-chained audit trail scoped to the organization.
 ### What are the current limitations?
 
 The MVP performs a single-page passive scan, screenshot comparison is heuristic, dynamic content can
-cause false positives and real AI analysis requires an evaluator-supplied provider key.
+cause false positives and real AI analysis requires an evaluator-supplied provider key. The current
+workspace session could not complete Docker runtime verification because the user lacks Docker
+socket permission.

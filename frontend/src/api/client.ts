@@ -183,6 +183,8 @@ export type AuditLog = {
   id: string;
   organization_id: string;
   user_id: string;
+  user_name: string | null;
+  user_email: string | null;
   action: string;
   resource_type: string;
   resource_id: string;
