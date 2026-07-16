@@ -234,7 +234,19 @@ async def generate_with_one_structured_retry(
     except AIProviderError as exc:
         if exc.safe_message != "Provider returned invalid structured JSON":
             raise
-    return await client.generate_analysis(request, prompt)
+    return await client.generate_analysis(request, retry_prompt(prompt))
+
+
+def retry_prompt(prompt: AIAnalysisPrompt) -> AIAnalysisPrompt:
+    return AIAnalysisPrompt(
+        system_prompt=prompt.system_prompt,
+        user_prompt=(
+            "Return only valid JSON matching the configured schema. "
+            "No markdown or prose.\n\n"
+            f"{prompt.user_prompt}"
+        ),
+        evidence=prompt.evidence,
+    )
 
 
 def enabled_provider_config(db: Session, organization_id: str) -> AIConfiguration:

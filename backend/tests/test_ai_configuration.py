@@ -18,11 +18,14 @@ from app.services.ai.encryption import (
     decrypt_api_key,
     encrypt_api_key,
 )
+from app.services.ai.gemini_provider import GeminiProvider
 from app.services.ai.schemas import (
     AIAnalysisPrompt,
     AIIncidentAnalysisResponse,
     AIProviderRequest,
 )
+from app.services.ai.structured_output import json_schema_for_model
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 
 from tests.api_client import with_client
@@ -74,6 +77,277 @@ class InvalidOutputProvider(SuccessfulProvider):
         self.captured.prompt = prompt
         self.captured.generate_calls += 1
         raise AIProviderError("Provider returned invalid structured JSON")
+
+
+@dataclass
+class CapturedGeminiHttp:
+    payloads: list[dict[str, object]]
+
+
+def test_gemini_supported_schema_serialization() -> None:
+    schema = json_schema_for_model(AIIncidentAnalysisResponse)
+
+    assert schema["type"] == "object"
+    assert schema["additionalProperties"] is False
+    assert set(schema["required"]) == {
+        "incident_summary",
+        "priority_explanation",
+        "immediate_actions",
+        "long_term_actions",
+        "possible_false_positive_factors",
+        "confidence_note",
+    }
+    assert schema["properties"]["immediate_actions"]["items"] == {"type": "string"}
+
+
+def test_gemini_schema_sanitizer_removes_unsupported_fields() -> None:
+    class UnsupportedSchemaFields(BaseModel):
+        status: str = Field(
+            default="ok",
+            min_length=1,
+            max_length=20,
+            examples=["ok"],
+            json_schema_extra={"readOnly": True, "writeOnly": True},
+        )
+
+    schema = json_schema_for_model(UnsupportedSchemaFields)
+    serialized = str(schema)
+
+    assert schema["required"] == ["status"]
+    assert schema["additionalProperties"] is False
+    assert "default" not in serialized
+    assert "examples" not in serialized
+    assert "minLength" not in serialized
+    assert "maxLength" not in serialized
+    assert "readOnly" not in serialized
+    assert "writeOnly" not in serialized
+
+
+def test_gemini_valid_structured_response(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured = mock_gemini_http(
+        monkeypatch,
+        {
+            "candidates": [
+                {
+                    "content": {
+                        "parts": [
+                            {
+                                "text": (
+                                    '{"incident_summary":"Review needed",'
+                                    '"priority_explanation":"High deterministic risk",'
+                                    '"immediate_actions":["Verify deployment"],'
+                                    '"long_term_actions":["Harden release process"],'
+                                    '"possible_false_positive_factors":["Planned change"],'
+                                    '"confidence_note":"Based on provided evidence"}'
+                                )
+                            }
+                        ]
+                    }
+                }
+            ]
+        },
+    )
+
+    response = asyncio.run(
+        GeminiProvider().generate_analysis(gemini_request(), analysis_prompt())
+    )
+
+    assert response.incident_summary == "Review needed"
+    generation_config = captured.payloads[0]["generationConfig"]
+    assert generation_config["temperature"] == 0.0
+    assert generation_config["responseMimeType"] == "application/json"
+    assert "responseJsonSchema" in generation_config
+    assert "responseSchema" not in generation_config
+    assert "responseFormat" not in generation_config
+    schema = generation_config["responseJsonSchema"]
+    assert set(schema["required"]) == {
+        "incident_summary",
+        "priority_explanation",
+        "immediate_actions",
+        "long_term_actions",
+        "possible_false_positive_factors",
+        "confidence_note",
+    }
+
+
+def test_gemini_fenced_json_defensive_parsing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mock_gemini_http(
+        monkeypatch,
+        {
+            "candidates": [
+                {
+                    "content": {
+                        "parts": [
+                            {
+                                "text": (
+                                    '```json\n{"incident_summary":"Review needed",'
+                                    '"priority_explanation":"High deterministic risk",'
+                                    '"immediate_actions":["Verify deployment"],'
+                                    '"long_term_actions":["Harden release process"],'
+                                    '"possible_false_positive_factors":["Planned change"],'
+                                    '"confidence_note":"Based on provided evidence"}\n```'
+                                )
+                            }
+                        ]
+                    }
+                }
+            ]
+        },
+    )
+
+    response = asyncio.run(
+        GeminiProvider().generate_analysis(gemini_request(), analysis_prompt())
+    )
+
+    assert response.confidence_note == "Based on provided evidence"
+
+
+def test_gemini_missing_required_field_is_rejected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mock_gemini_http(
+        monkeypatch,
+        {
+            "candidates": [
+                {
+                    "content": {
+                        "parts": [
+                            {
+                                "text": (
+                                    '{"incident_summary":"Review needed",'
+                                    '"priority_explanation":"High deterministic risk",'
+                                    '"immediate_actions":["Verify deployment"],'
+                                    '"long_term_actions":["Harden release process"],'
+                                    '"possible_false_positive_factors":["Planned change"]}'
+                                )
+                            }
+                        ]
+                    }
+                }
+            ]
+        },
+    )
+
+    with pytest.raises(AIProviderError, match="invalid structured JSON"):
+        asyncio.run(
+            GeminiProvider().generate_analysis(gemini_request(), analysis_prompt())
+        )
+
+
+def test_gemini_test_connection_uses_minimal_schema(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured = mock_gemini_http(
+        monkeypatch,
+        {
+            "candidates": [
+                {
+                    "content": {
+                        "parts": [
+                            {
+                                "text": (
+                                    '{"status":"ok",'
+                                    '"message":"Gemini connection successful"}'
+                                )
+                            }
+                        ]
+                    }
+                }
+            ]
+        },
+    )
+
+    asyncio.run(GeminiProvider().test_connection(gemini_request()))
+
+    generation_config = captured.payloads[0]["generationConfig"]
+    assert generation_config["responseMimeType"] == "application/json"
+    assert "responseJsonSchema" in generation_config
+    assert "responseSchema" not in generation_config
+    assert "responseFormat" not in generation_config
+    schema = generation_config["responseJsonSchema"]
+    assert set(schema["properties"]) == {"status", "message"}
+    assert schema["required"] == ["status", "message"]
+    assert schema["additionalProperties"] is False
+    assert "incident_summary" not in schema["properties"]
+    assert captured.payloads[0]["contents"][0]["parts"][0]["text"] == (
+        "Return a successful connection confirmation matching the supplied schema."
+    )
+
+
+def test_gemini_analysis_uses_full_analysis_schema(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured = mock_gemini_http(
+        monkeypatch,
+        {
+            "candidates": [
+                {
+                    "content": {
+                        "parts": [
+                            {
+                                "parsed": {
+                                    "incident_summary": "Review needed",
+                                    "priority_explanation": "High deterministic risk",
+                                    "immediate_actions": ["Verify deployment"],
+                                    "long_term_actions": ["Harden release process"],
+                                    "possible_false_positive_factors": [
+                                        "Planned change"
+                                    ],
+                                    "confidence_note": "Based on provided evidence",
+                                }
+                            }
+                        ]
+                    }
+                }
+            ]
+        },
+    )
+
+    response = asyncio.run(
+        GeminiProvider().generate_analysis(gemini_request(), analysis_prompt())
+    )
+
+    assert response.priority_explanation == "High deterministic risk"
+    schema = captured.payloads[0]["generationConfig"]["responseJsonSchema"]
+    assert "incident_summary" in schema["properties"]
+    assert "status" not in schema["properties"]
+
+
+def test_gemini_http_400_maps_to_safe_request_error(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    mock_gemini_http(
+        monkeypatch,
+        {
+            "error": {
+                "code": 400,
+                "status": "INVALID_ARGUMENT",
+                "message": (
+                    "Invalid JSON payload received. Unknown name "
+                    '"responseFormat" at generationConfig.'
+                ),
+            }
+        },
+        status_code=400,
+    )
+
+    with pytest.raises(AIProviderError) as exc_info:
+        asyncio.run(
+            GeminiProvider().generate_analysis(gemini_request(), analysis_prompt())
+        )
+
+    assert (
+        exc_info.value.safe_message
+        == "Gemini rejected the structured-output schema or request"
+    )
+    assert "status=400" in caplog.text
+    assert "INVALID_ARGUMENT" in caplog.text
+    assert TEST_KEY not in caplog.text
 
 
 def test_administrator_can_save_ai_configuration(seeded_users: SeededUsers) -> None:
@@ -310,6 +584,40 @@ def test_ai_analysis_records_exact_provider_and_model(
         assert analysis.model == "gpt-4.1-mini"
 
 
+def test_gemini_analysis_records_exact_provider_and_model(
+    seeded_users: SeededUsers,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    scan_id = completed_scan_id(seeded_users)
+    save_config_direct(
+        seeded_users,
+        provider=AIProvider.gemini,
+        model="gemini-3.5-flash",
+    )
+    captured = CapturedProviderCall()
+    monkeypatch.setattr(
+        "app.services.ai.provider_factory.create_provider",
+        lambda provider: SuccessfulProvider(captured),
+    )
+
+    async def scenario(client: httpx.AsyncClient) -> None:
+        await login(client, seeded_users.admin.email)
+        response = await client.post(f"/api/scans/{scan_id}/ai-analysis")
+        assert response.status_code == 200
+        body = response.json()
+        assert body["status"] == "completed"
+        assert body["provider"] == "gemini"
+        assert body["model"] == "gemini-3.5-flash"
+
+    asyncio.run(with_client(scenario))
+
+    with SessionLocal() as db:
+        analysis = db.scalar(select(AIAnalysis))
+        assert analysis is not None
+        assert analysis.provider == AIProvider.gemini
+        assert analysis.model == "gemini-3.5-flash"
+
+
 def test_invalid_provider_output_is_rejected(
     seeded_users: SeededUsers,
     monkeypatch: pytest.MonkeyPatch,
@@ -334,6 +642,19 @@ def test_invalid_provider_output_is_rejected(
 
     asyncio.run(with_client(scenario))
     assert captured.generate_calls == 2
+    assert captured.prompt is not None
+    assert "No markdown or prose" in captured.prompt.user_prompt
+
+    with SessionLocal() as db:
+        analysis = db.scalar(select(AIAnalysis))
+        assert analysis is not None
+        assert analysis.status == "failed"
+        assert analysis.incident_summary is None
+        assert analysis.priority_explanation is None
+        assert analysis.immediate_actions_json is None
+        assert analysis.long_term_actions_json is None
+        assert analysis.false_positive_factors_json is None
+        assert analysis.confidence_note is None
 
 
 def test_cross_organization_scan_ai_analysis_returns_404(
@@ -410,6 +731,60 @@ def test_logs_do_not_contain_test_api_keys(
 
     asyncio.run(with_client(scenario))
     assert TEST_KEY not in caplog.text
+
+
+def mock_gemini_http(
+    monkeypatch: pytest.MonkeyPatch,
+    response_body: dict[str, object],
+    *,
+    status_code: int = 200,
+) -> CapturedGeminiHttp:
+    captured = CapturedGeminiHttp(payloads=[])
+
+    class MockAsyncClient:
+        def __init__(self, timeout: int) -> None:
+            self.timeout = timeout
+
+        async def __aenter__(self) -> MockAsyncClient:
+            return self
+
+        async def __aexit__(self, *args: object) -> None:
+            return None
+
+        async def post(
+            self,
+            url: str,
+            *,
+            headers: dict[str, str],
+            json: dict[str, object],
+        ) -> httpx.Response:
+            assert "x-goog-api-key" in headers
+            assert "Authorization" not in headers
+            assert TEST_KEY not in url
+            captured.payloads.append(json)
+            request = httpx.Request("POST", url)
+            return httpx.Response(status_code, json=response_body, request=request)
+
+    monkeypatch.setattr(httpx, "AsyncClient", MockAsyncClient)
+    return captured
+
+
+def gemini_request() -> AIProviderRequest:
+    return AIProviderRequest(
+        provider=AIProvider.gemini,
+        model="gemini-3.5-flash",
+        api_key=TEST_KEY,
+        base_url=None,
+        timeout_seconds=20,
+    )
+
+
+def analysis_prompt() -> AIAnalysisPrompt:
+    return AIAnalysisPrompt(
+        system_prompt="Return security-analysis JSON only.",
+        user_prompt="Analyze bounded evidence.",
+        evidence={"deterministic_risk_score": 75},
+    )
 
 
 def configuration_payload() -> dict[str, object]:

@@ -17,6 +17,11 @@ class AIIncidentAnalysisResponse(BaseModel):
     confidence_note: str = Field(min_length=1, max_length=2000)
 
 
+class AIConnectionTestResponse(BaseModel):
+    status: str = Field(min_length=1, max_length=40)
+    message: str = Field(min_length=1, max_length=200)
+
+
 @dataclass(frozen=True)
 class AIProviderRequest:
     provider: AIProvider
